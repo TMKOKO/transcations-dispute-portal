@@ -1,0 +1,24 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+*.trx
+
+# Node / Vite
+node_modules/
+web/dist/
+web/coverage/
+*.local
+
+# Env / secrets
+.env
+!.env.example
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
