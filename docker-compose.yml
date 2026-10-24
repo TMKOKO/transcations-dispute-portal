@@ -1,0 +1,49 @@
+# Local demo stack: PostgreSQL + API + portal (nginx), one command:
+#   docker compose up --build
+# Portal: http://localhost:3000   API: http://localhost:8080/swagger
+services:
+  db:
+    image: postgres:16-alpine
+    # 5433 on the host so this does not collide with a locally installed PostgreSQL on 5432.
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: disputes
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d disputes"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=disputes;Username=postgres;Password=postgres"
+      # Development turns on demo seeding and Swagger. Never use it outside a local demo.
+      ASPNETCORE_ENVIRONMENT: Development
+      # Dev-only value. appsettings.Development.json is stripped from the image (see Dockerfile),
+      # so the key is supplied here; a real deployment injects it from a secret store.
+      Jwt__Key: "dev-only-insecure-signing-key-change-me-32+bytes"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
