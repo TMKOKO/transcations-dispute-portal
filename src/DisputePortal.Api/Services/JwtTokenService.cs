@@ -12,18 +12,13 @@ public interface ITokenService
 {
     /// <summary>Issue a JWT for a customer (carries the CustomerId).</summary>
     IssuedToken CreateCustomerToken(Customer customer);
-
-    /// <summary>Issue a JWT for a back-office agent (carries the AgentId).</summary>
-    IssuedToken CreateAgentToken(Agent agent);
 }
 
 public sealed class JwtTokenService : ITokenService
 {
     public const string CustomerRole = "customer";
-    public const string AgentRole    = "agent";
 
     public const string CustomerIdClaim = "customerId";
-    public const string AgentIdClaim    = "agentId";
 
     private readonly SigningCredentials _credentials;
     private readonly string _issuer;
@@ -49,13 +44,6 @@ public sealed class JwtTokenService : ITokenService
         new Claim("role", CustomerRole),
         new Claim(CustomerIdClaim, customer.Id.ToString()),
         new Claim(JwtRegisteredClaimNames.Sub, $"customer:{customer.Id}"),
-    ]);
-
-    public IssuedToken CreateAgentToken(Agent agent) => Create(
-    [
-        new Claim("role", AgentRole),
-        new Claim(AgentIdClaim, agent.Id.ToString()),
-        new Claim(JwtRegisteredClaimNames.Sub, $"agent:{agent.Id}"),
     ]);
 
     private IssuedToken Create(IEnumerable<Claim> claims)

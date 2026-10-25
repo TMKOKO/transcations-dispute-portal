@@ -6,7 +6,6 @@ using DisputePortal.Api.Models;
 using DisputePortal.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 
 namespace DisputePortal.Api.Controllers;
@@ -21,11 +20,13 @@ public partial class DisputesController : ControllerBase
 
     private readonly AppDbContext _db;
     private readonly IDisputeService _disputes;
+    private readonly ILogger<DisputesController> _logger;
 
-    public DisputesController(AppDbContext db, IDisputeService disputes)
+    public DisputesController(AppDbContext db, IDisputeService disputes, ILogger<DisputesController> logger)
     {
         _db = db;
         _disputes = disputes;
+        _logger = logger;
     }
 
     /// <summary>Raise a dispute on one of the caller's transactions.</summary>
@@ -66,7 +67,8 @@ public partial class DisputesController : ControllerBase
             return Ok(body);
         }
 
-        return CreatedAtAction(nameof(Get), new { id = dispute.Id }, body);
+        // No Location header: there is deliberately no GET URL that carries a dispute id.
+        return StatusCode(StatusCodes.Status201Created, body);
     }
 
     /// <summary>The caller's disputes, newest first.</summary>
@@ -89,18 +91,29 @@ public partial class DisputesController : ControllerBase
             .Take(q.PageSize)
             .ToListAsync(ct);
 
+        _logger.LogInformation(
+            "Disputes query: loaded {Count} of {Total} for customer {CustomerId} (status {Status}, page {Page}, size {PageSize})",
+            items.Count, total, customerId, q.Status, q.Page, q.PageSize);
+
         return Ok(new PagedResponse<DisputeSummaryResponse>(
             items.Select(DisputeSummaryResponse.From).ToList(), q.Page, q.PageSize, total));
     }
 
-    /// <summary>One of the caller's disputes, with its status timeline.</summary>
-    [HttpGet("{id:guid}")]
+    /// <summary>One of the caller's disputes, with its status timeline, by the id in the request body.</summary>
+    /// <remarks>
+    /// POST rather than <c>GET /api/disputes/{id}</c>: the id is kept out of the URL, so it does not
+    /// land in access logs, proxy logs or browser history. The call is still read-only.
+    /// </remarks>
+    [HttpPost("lookup")]
     [ProducesResponseType(typeof(DisputeDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Get([FromBody] DisputeLookupRequest request, CancellationToken ct)
     {
         var customerId = User.GetCustomerId();
         if (customerId is null) return Unauthorized();
+
+        var id = request.DisputeId!.Value;
 
         // Scoped to customerId: another customer's dispute is a 404, never a 403.
         var dispute = await _db.Disputes.AsNoTracking()
@@ -109,25 +122,28 @@ public partial class DisputesController : ControllerBase
             .FirstOrDefaultAsync(d => d.Id == id && d.CustomerId == customerId, ct);
 
         if (dispute is null)
+        {
+            _logger.LogInformation("Dispute lookup: {DisputeId} not found for customer {CustomerId}", id, customerId);
             return this.ProblemWithCode("Dispute not found.", StatusCodes.Status404NotFound, "dispute_not_found");
+        }
 
+        _logger.LogInformation("Dispute lookup: loaded {DisputeNumber} ({DisputeId}), status {Status}, for customer {CustomerId}",
+            dispute.DisputeNumber, dispute.Id, dispute.Status, customerId);
         return Ok(DisputeDetailResponse.From(dispute));
     }
 
-    /// <summary>Withdraw an open dispute. Allowed while it is Submitted or UnderReview.</summary>
-    [HttpPost("{id:guid}/withdraw")]
+    /// <summary>Withdraw an open dispute, named by the id in the body. Allowed while it is Submitted or UnderReview.</summary>
+    [HttpPost("withdraw")]
     [ProducesResponseType(typeof(DisputeDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Withdraw(
-        Guid id,
-        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] WithdrawDisputeRequest? request,
-        CancellationToken ct)
+    public async Task<IActionResult> Withdraw([FromBody] WithdrawDisputeRequest request, CancellationToken ct)
     {
         var customerId = User.GetCustomerId();
         if (customerId is null) return Unauthorized();
 
-        var result = await _disputes.WithdrawAsync(customerId.Value, id, request?.Note, ct);
+        var result = await _disputes.WithdrawAsync(customerId.Value, request.DisputeId!.Value, request.Note, ct);
         return result.IsSuccess
             ? Ok(DisputeDetailResponse.From(result.Value!))
             : this.ToProblem(result.Error!);

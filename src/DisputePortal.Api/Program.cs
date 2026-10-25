@@ -20,7 +20,32 @@ builder.Services.AddControllers(o =>
         o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
         // Otherwise a bad enum value echoes the internal CLR type name back to the caller.
         o.AllowInputFormatterExceptionMessages = false;
+    })
+    .ConfigureApiBehaviorOptions(o =>
+    {
+        // Model-validation 400s are produced by MVC before any action runs, so they never reach
+        // ProblemResults' failure log. Log them here, then return the default response unchanged.
+        // Field names only: the rejected values may be personal information.
+        var defaultResponse = o.InvalidModelStateResponseFactory;
+        o.InvalidModelStateResponseFactory = context =>
+        {
+            var http = context.HttpContext;
+            var fields = context.ModelState.Where(e => e.Value?.Errors.Count > 0).Select(e => e.Key);
+            http.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("DisputePortal.Api.Validation")
+                .LogWarning("Request {Method} {Path} failed validation on {Fields} (trace {TraceId})",
+                    http.Request.Method, http.Request.Path.Value, string.Join(", ", fields), http.TraceIdentifier);
+            return defaultResponse(context);
+        };
     });
+
+// Outside Development, one JSON object per line so Instana or any log collector gets CustomerId,
+// Code, TraceId etc. as fields rather than text. Development keeps the readable console.
+// Turn levels up per category with env vars, no rebuild, for example:
+//   Logging__LogLevel__DisputePortal=Debug
+//   Logging__LogLevel__Microsoft.EntityFrameworkCore.Database.Command=Information  (SQL + timings; values stay hidden)
+if (!builder.Environment.IsDevelopment())
+    builder.Logging.AddJsonConsole(o => o.IncludeScopes = true);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -33,7 +58,7 @@ builder.Services.AddSwaggerGen(c =>
         Scheme       = "bearer",
         BearerFormat = "JWT",
         In           = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Description  = "Paste the token returned by /api/auth/login or /api/auth/agent-login."
+        Description  = "Paste the token returned by /api/auth/login."
     });
     c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
     {
@@ -94,6 +119,7 @@ builder.Services.AddAuthorization();
 // integration tests can exercise the 429 path without sending hundreds of requests.
 var strictLimit  = builder.Configuration.GetValue("RateLimiting:AuthPermitsPerMinute", 10);
 var generalLimit = builder.Configuration.GetValue("RateLimiting:GeneralPermitsPerMinute", 300);
+var trustForwardedFor = builder.Configuration.GetValue("RateLimiting:TrustForwardedFor", false);
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -101,7 +127,7 @@ builder.Services.AddRateLimiter(options =>
 
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
     {
-        var client = ClientKey(context);
+        var client = ClientKey(context, trustForwardedFor);
 
         return IsCredentialPath(context.Request)
             ? RateLimitPartition.GetFixedWindowLimiter($"strict:{client}", _ => new FixedWindowRateLimiterOptions
@@ -129,19 +155,20 @@ builder.Services.AddRateLimiter(options =>
     };
 });
 
-// Behind a reverse proxy (nginx in compose, a load balancer in production) the socket address is
-// the proxy, which would put every caller in one partition. The first X-Forwarded-For hop is the
-// real client. Only trustworthy because the API is not reachable except through that proxy.
-static string ClientKey(HttpContext context)
+// Behind a load balancer or CDN the socket address is the proxy, which would put every caller in one
+// partition, so the first X-Forwarded-For hop is the real client. Opt-in: when the API is reachable
+// directly (as in local compose), a caller could set the header to anything and get a fresh budget
+// on every request. Enable only where a trusted proxy overwrites it.
+static string ClientKey(HttpContext context, bool trustForwardedFor)
 {
     var forwarded = context.Request.Headers["X-Forwarded-For"].ToString();
-    if (!string.IsNullOrWhiteSpace(forwarded))
+    if (trustForwardedFor && !string.IsNullOrWhiteSpace(forwarded))
         return forwarded.Split(',')[0].Trim();
 
     return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 }
 
-// Credential-guessing surface: both logins. CORS preflights are excluded — an OPTIONS would
+// Credential-guessing surface: the login route. CORS preflights are excluded — an OPTIONS would
 // otherwise cost a permit and halve the budget for every browser caller.
 static bool IsCredentialPath(HttpRequest request) =>
     request.Path.StartsWithSegments("/api/auth", StringComparison.OrdinalIgnoreCase)
@@ -160,8 +187,8 @@ builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServe
     o.AddServerHeader = false;
 });
 
-// In compose the portal and API share an origin through nginx, so no CORS is needed. Origins are
-// configurable for the case where the portal is hosted separately (e.g. S3 + CloudFront).
+// The portal is a separate project served from its own origin, so its origin(s) must be listed.
+// Config-driven: localhost in compose/Development, the real portal domain in production.
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options =>
 {
@@ -177,12 +204,17 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+    var pending = (await db.Database.GetPendingMigrationsAsync()).ToList();
+    if (pending.Count > 0)
+        app.Logger.LogInformation("Applying {Count} database migration(s): {Migrations}", pending.Count, string.Join(", ", pending));
     await db.Database.MigrateAsync();
+    app.Logger.LogInformation("Database schema is up to date");
 
     // Every seeded account shares one published demo password, so seeding must never run against
     // a real environment — even one whose tables happen to be empty.
     if (app.Environment.IsDevelopment())
-        await DbSeeder.SeedAsync(db, scope.ServiceProvider.GetRequiredService<TimeProvider>());
+        await DbSeeder.SeedAsync(db, scope.ServiceProvider.GetRequiredService<TimeProvider>(), app.Logger);
 }
 
 // Outermost, so the headers land on error responses too.

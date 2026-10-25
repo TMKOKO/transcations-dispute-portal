@@ -16,8 +16,6 @@ public interface IDisputeService
         Guid customerId, string idempotencyKey, RaiseDisputeRequest request, CancellationToken ct);
 
     Task<ServiceResult<Dispute>> WithdrawAsync(Guid customerId, Guid disputeId, string? note, CancellationToken ct);
-
-    Task<ServiceResult<Dispute>> AgentTransitionAsync(Guid disputeId, DisputeStatus to, string? note, CancellationToken ct);
 }
 
 /// <summary>
@@ -55,14 +53,21 @@ public sealed class DisputeService : IDisputeService
         var transaction = await _db.Transactions
             .FirstOrDefaultAsync(t => t.Id == transactionId && t.CustomerId == customerId, ct);
         if (transaction is null)
+        {
+            _logger.LogInformation("Raise: transaction {TransactionId} not found for customer {CustomerId}", transactionId, customerId);
             return ServiceResult<RaiseDisputeOutcome>.Fail(ServiceErrorKind.NotFound,
                 "transaction_not_found", "Transaction not found.");
+        }
+        _logger.LogInformation("Raise: loaded transaction {TransactionId} ({Status} {Type}, {Amount} {Currency}) for customer {CustomerId}",
+            transactionId, transaction.Status, transaction.Type, transaction.Amount, transaction.Currency, customerId);
 
         var latestStatus = await _db.Disputes
             .Where(d => d.TransactionId == transactionId)
             .OrderByDescending(d => d.CreatedAt)
             .Select(d => (DisputeStatus?)d.Status)
             .FirstOrDefaultAsync(ct);
+        _logger.LogInformation("Raise: latest dispute on transaction {TransactionId} is {LatestStatus}",
+            transactionId, latestStatus?.ToString() ?? "none");
 
         var eligibility = _eligibility.Evaluate(transaction, latestStatus);
         if (!eligibility.CanDispute)
@@ -81,6 +86,7 @@ public sealed class DisputeService : IDisputeService
 
         var now = _clock.GetUtcNow().UtcDateTime;
         var sequence = await _db.NextDisputeSequenceAsync(ct);
+        _logger.LogInformation("Raise: allocated dispute sequence {Sequence}", sequence);
 
         var dispute = Dispute.Raise(
             DisputeNumber.Format(now.Year, sequence),
@@ -103,6 +109,8 @@ public sealed class DisputeService : IDisputeService
             // Lost a race the up-front checks could not see. Detach the failed insert so the
             // follow-up query reads the winner from the database rather than our tracked copy.
             _db.ChangeTracker.Clear();
+            _logger.LogWarning("Raise: insert for transaction {TransactionId} lost a race on {Constraint}",
+                transactionId, pg.ConstraintName);
 
             if (pg.ConstraintName == AppDbContext.IdempotencyIndex)
             {
@@ -114,6 +122,7 @@ public sealed class DisputeService : IDisputeService
                 return ServiceResult<RaiseDisputeOutcome>.Fail(ServiceErrorKind.Conflict,
                     ToCode(IneligibleReason.ActiveDispute), "This transaction already has an open dispute.");
 
+            _logger.LogError("Raise: unexpected unique violation on {Constraint}; rethrowing", pg.ConstraintName);
             throw;
         }
 
@@ -130,28 +139,14 @@ public sealed class DisputeService : IDisputeService
     {
         var dispute = await LoadAsync(d => d.Id == disputeId && d.CustomerId == customerId, ct);
         if (dispute is null)
+        {
+            _logger.LogInformation("Withdraw: dispute {DisputeId} not found for customer {CustomerId}", disputeId, customerId);
             return ServiceResult<Dispute>.Fail(ServiceErrorKind.NotFound, "dispute_not_found", "Dispute not found.");
+        }
+        _logger.LogInformation("Withdraw: loaded dispute {DisputeId}, status {Status}, for customer {CustomerId}",
+            disputeId, dispute.Status, customerId);
 
         return await TransitionAsync(dispute, DisputeStatus.Withdrawn, DisputeActor.Customer, note, ct);
-    }
-
-    public async Task<ServiceResult<Dispute>> AgentTransitionAsync(Guid disputeId, DisputeStatus to, string? note, CancellationToken ct)
-    {
-        var dispute = await LoadAsync(d => d.Id == disputeId, ct);
-        if (dispute is null)
-            return ServiceResult<Dispute>.Fail(ServiceErrorKind.NotFound, "dispute_not_found", "Dispute not found.");
-
-        // Withdrawing is the customer's decision, not the reviewer's.
-        if (to == DisputeStatus.Withdrawn)
-            return ServiceResult<Dispute>.Fail(ServiceErrorKind.BusinessRule, "agent_cannot_withdraw",
-                "Only the customer can withdraw a dispute.");
-
-        // The customer sees this note on their timeline: an outcome without a reason is not acceptable.
-        if ((to is DisputeStatus.Resolved or DisputeStatus.Rejected) && string.IsNullOrWhiteSpace(note))
-            return ServiceResult<Dispute>.Fail(ServiceErrorKind.BusinessRule, "note_required",
-                $"A note explaining the outcome is required to mark a dispute {to}.");
-
-        return await TransitionAsync(dispute, to, DisputeActor.Agent, note, ct);
     }
 
     private async Task<ServiceResult<Dispute>> TransitionAsync(
@@ -172,6 +167,7 @@ public sealed class DisputeService : IDisputeService
         }
         catch (DbUpdateConcurrencyException)
         {
+            _logger.LogWarning("Dispute {DisputeId}: move {From} -> {To} lost to a concurrent update", dispute.Id, from, to);
             return ServiceResult<Dispute>.Fail(ServiceErrorKind.Conflict, "concurrent_update",
                 "This dispute was updated by someone else. Refresh to see its latest status.");
         }
@@ -183,15 +179,26 @@ public sealed class DisputeService : IDisputeService
     private async Task<ServiceResult<RaiseDisputeOutcome>?> ReplayAsync(
         Guid customerId, string idempotencyKey, Guid transactionId, CancellationToken ct)
     {
+        // The key itself is never logged: it is a client secret of sorts, and the dispute id is enough.
         var existing = await LoadAsync(d => d.CustomerId == customerId && d.IdempotencyKey == idempotencyKey, ct);
-        if (existing is null) return null;
+        if (existing is null)
+        {
+            _logger.LogInformation("Raise: idempotency key is new for customer {CustomerId}", customerId);
+            return null;
+        }
 
         // Same key, different request: almost certainly a client bug. Refuse rather than return a
         // dispute for a transaction the caller did not ask about.
         if (existing.TransactionId != transactionId)
+        {
+            _logger.LogWarning("Raise: idempotency key already used by dispute {DisputeId} on transaction {OriginalTransactionId}, now sent for {TransactionId}",
+                existing.Id, existing.TransactionId, transactionId);
             return ServiceResult<RaiseDisputeOutcome>.Fail(ServiceErrorKind.Conflict, "idempotency_key_reused",
                 "This Idempotency-Key was already used for a different transaction.");
+        }
 
+        _logger.LogInformation("Raise: replayed dispute {DisputeNumber} ({DisputeId}) for a repeated idempotency key",
+            existing.DisputeNumber, existing.Id);
         return ServiceResult<RaiseDisputeOutcome>.Ok(new RaiseDisputeOutcome(existing, Replayed: true));
     }
 

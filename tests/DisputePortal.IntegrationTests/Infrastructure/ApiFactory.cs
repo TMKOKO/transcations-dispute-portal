@@ -6,6 +6,8 @@ using DisputePortal.Api.Models;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Testing;
 
 namespace DisputePortal.IntegrationTests.Infrastructure;
 
@@ -33,7 +35,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Jwt:Key", "integration-tests-signing-key-at-least-32-bytes!");
         builder.UseSetting("RateLimiting:AuthPermitsPerMinute", _authPermitsPerMinute.ToString());
         builder.UseSetting("RateLimiting:GeneralPermitsPerMinute", "100000");
+
+        // In-memory copy of every log record, so tests can assert what was (and was not) logged.
+        builder.ConfigureLogging(logging => logging.AddFakeLogging());
     }
+
+    public FakeLogCollector Logs => Services.GetFakeLogCollector();
 
     public async Task<T> WithDbAsync<T>(Func<AppDbContext, Task<T>> action)
     {
@@ -57,19 +64,6 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         db.Customers.Add(customer);
         await db.SaveChangesAsync();
         return customer;
-    });
-
-    public Task<Agent> CreateAgentAsync() => WithDbAsync(async db =>
-    {
-        var agent = new Agent
-        {
-            DisplayName  = "Test Agent",
-            Email        = $"agent-{Guid.NewGuid():N}@example.test",
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(Password, workFactor: 4),
-        };
-        db.Agents.Add(agent);
-        await db.SaveChangesAsync();
-        return agent;
     });
 
     public Task<Transaction> CreateTransactionAsync(
@@ -98,16 +92,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         return tx;
     });
 
-    public async Task<HttpClient> CustomerClientAsync(Customer customer) =>
-        await LoggedInClientAsync("/api/auth/login", customer.Email);
-
-    public async Task<HttpClient> AgentClientAsync(Agent agent) =>
-        await LoggedInClientAsync("/api/auth/agent-login", agent.Email);
-
-    private async Task<HttpClient> LoggedInClientAsync(string route, string email)
+    public async Task<HttpClient> CustomerClientAsync(Customer customer)
     {
         var client = CreateClient();
-        var response = await client.PostAsJsonAsync(route, new { email, password = Password });
+        var response = await client.PostAsJsonAsync("/api/auth/login", new { email = customer.Email, password = Password });
         response.EnsureSuccessStatusCode();
         var login = await response.Content.ReadFromJsonAsync<LoginResponse>(Json.Options);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.Token);

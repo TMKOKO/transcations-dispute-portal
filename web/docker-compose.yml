@@ -1,0 +1,17 @@
+# Portal only. Start the API first from the repository root (`docker compose up --build`),
+# then from this folder:
+#   docker compose up --build
+# Portal: http://localhost:3000
+services:
+  web:
+    build:
+      context: .
+      args:
+        # Where the browser calls the API. The API's CORS list must include this portal's origin.
+        VITE_API_BASE: http://localhost:8080
+        VITE_DEMO_HINT: "true"
+    environment:
+      API_ORIGIN: http://localhost:8080
+    ports:
+      - "3000:8080"
+    restart: unless-stopped

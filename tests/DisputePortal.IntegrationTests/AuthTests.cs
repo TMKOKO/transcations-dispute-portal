@@ -51,16 +51,6 @@ public class AuthTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Customer_credentials_do_not_work_on_agent_login()
-    {
-        var customer = await _api.CreateCustomerAsync();
-        var response = await _api.CreateClient().PostAsJsonAsync("/api/auth/agent-login",
-            new { email = customer.Email, password = ApiFactory.Password });
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
     public async Task Protected_routes_require_a_token()
     {
         var client = _api.CreateClient();

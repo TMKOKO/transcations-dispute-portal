@@ -40,8 +40,8 @@ public class Dispute
     public DateTime UpdatedAt { get; set; }
     public DateTime? ResolvedAt { get; private set; }
 
-    // Mapped to Postgres xmin. A customer withdrawing while an agent resolves the same dispute
-    // makes the second SaveChanges fail instead of silently overwriting the first.
+    // Mapped to Postgres xmin. Two writes racing on the same dispute (say, a withdraw from two tabs)
+    // make the second SaveChanges fail instead of silently overwriting the first.
     public uint Version { get; set; }
 
     public List<DisputeStatusHistory> History { get; set; } = [];

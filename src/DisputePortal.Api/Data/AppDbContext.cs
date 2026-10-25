@@ -15,7 +15,6 @@ public class AppDbContext : DbContext
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
     public DbSet<Customer> Customers => Set<Customer>();
-    public DbSet<Agent> Agents => Set<Agent>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<Dispute> Disputes => Set<Dispute>();
     public DbSet<DisputeStatusHistory> DisputeStatusHistory => Set<DisputeStatusHistory>();
@@ -42,15 +41,6 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.Email).IsUnique();
             entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
-            entity.Property(e => e.Email).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.PasswordHash).IsRequired();
-        });
-
-        modelBuilder.Entity<Agent>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.Email).IsUnique();
-            entity.Property(e => e.DisplayName).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Email).IsRequired().HasMaxLength(200);
             entity.Property(e => e.PasswordHash).IsRequired();
         });

@@ -53,19 +53,22 @@ public class DisputeListQuery
     public int PageSize { get; set; } = 20;
 }
 
-public class WithdrawDisputeRequest
+/// <summary>
+/// Body of <c>POST /api/disputes/lookup</c>. Ids travel in the body rather than the URL, so they
+/// stay out of access logs, proxy logs and browser history.
+/// </summary>
+public class DisputeLookupRequest
 {
-    [StringLength(500)]
-    public string? Note { get; set; }
+    // Nullable + [Required] so a missing id is a 400, not a lookup of Guid.Empty.
+    [Required]
+    public Guid? DisputeId { get; set; }
 }
 
-public class AgentStatusUpdateRequest
+public class WithdrawDisputeRequest
 {
     [Required]
-    [EnumDataType(typeof(DisputeStatus))]
-    public DisputeStatus? Status { get; set; }
+    public Guid? DisputeId { get; set; }
 
-    // Required by DisputeService for Resolved/Rejected: the customer is owed a reason.
     [StringLength(500)]
     public string? Note { get; set; }
 }

@@ -30,6 +30,17 @@ public class TransactionQuery : IValidatableObject
     }
 }
 
+/// <summary>
+/// Body of <c>POST /api/transactions/lookup</c>. The id travels in the body rather than the URL,
+/// so it stays out of access logs, proxy logs and browser history.
+/// </summary>
+public class TransactionLookupRequest
+{
+    // Nullable + [Required] so a missing id is a 400, not a lookup of Guid.Empty.
+    [Required]
+    public Guid? TransactionId { get; set; }
+}
+
 public record DisputeRef(Guid Id, string DisputeNumber, DisputeStatus Status);
 
 public record TransactionResponse(

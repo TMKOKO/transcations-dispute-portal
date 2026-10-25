@@ -16,7 +16,6 @@ namespace DisputePortal.Api.Data;
 public static class DbSeeder
 {
     public const string DemoPassword = "Demo@12345!";
-    public const string AgentEmail   = "agent@example.com";
 
     private sealed record Merchant(string Name, string Category, TransactionChannel Channel, decimal Min, decimal Max);
 
@@ -36,14 +35,16 @@ public static class DbSeeder
         new("Nando's",          "Restaurants",     TransactionChannel.Card, 120,   600),
     ];
 
-    public static async Task SeedAsync(AppDbContext db, TimeProvider clock, CancellationToken ct = default)
+    public static async Task SeedAsync(AppDbContext db, TimeProvider clock, ILogger logger, CancellationToken ct = default)
     {
-        if (await db.Customers.AnyAsync(ct)) return;
+        if (await db.Customers.AnyAsync(ct))
+        {
+            logger.LogInformation("Demo seed skipped: customers already exist");
+            return;
+        }
 
         var now = clock.GetUtcNow().UtcDateTime;
         var hash = BCrypt.Net.BCrypt.HashPassword(DemoPassword);
-
-        db.Agents.Add(new Agent { DisplayName = "Ayanda (Disputes team)", Email = AgentEmail, PasswordHash = hash });
 
         (string First, string Last, string Email, string Card)[] people =
         [
@@ -93,6 +94,8 @@ public static class DbSeeder
         }
 
         await db.SaveChangesAsync(ct);
+        logger.LogInformation("Demo seed saved {Customers} customers, {Transactions} transactions and {Disputes} disputes",
+            db.Customers.Local.Count, db.Transactions.Local.Count, db.Disputes.Local.Count);
     }
 
     private static List<Transaction> GenerateTransactions(

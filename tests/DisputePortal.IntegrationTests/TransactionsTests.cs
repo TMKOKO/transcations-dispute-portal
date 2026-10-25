@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Models;
 using DisputePortal.Api.Services;
@@ -40,10 +41,26 @@ public class TransactionsTests : IAsyncLifetime
         var bTx = await _api.CreateTransactionAsync(b.Id);
 
         var client = await _api.CustomerClientAsync(a);
-        var response = await client.GetAsync($"/api/transactions/{bTx.Id}");
+        var response = await client.PostAsJsonAsync("/api/transactions/lookup", new { transactionId = bTx.Id });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("transaction_not_found", await response.ProblemCodeAsync());
+    }
+
+    [Fact]
+    public async Task Lookup_takes_the_id_from_the_body()
+    {
+        var c = await _api.CreateCustomerAsync();
+        var tx = await _api.CreateTransactionAsync(c.Id);
+        var client = await _api.CustomerClientAsync(c);
+
+        var found = await (await client.PostAsJsonAsync("/api/transactions/lookup", new { transactionId = tx.Id }))
+            .ReadAsync<TransactionResponse>();
+        Assert.Equal(tx.Id, found.Id);
+
+        // A missing id is a validation error, and the old URL form no longer exists.
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/transactions/lookup", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/transactions/{tx.Id}")).StatusCode);
     }
 
     [Fact]

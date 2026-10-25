@@ -26,8 +26,17 @@ public static class ProblemResults
 
     public static ObjectResult ProblemWithCode(this ControllerBase controller, string detail, int statusCode, string code)
     {
+        // Every error response the API returns passes through here, so this one line is the
+        // failure log. detail is written to be shown to the customer, so it is safe to log too.
+        var http = controller.HttpContext;
+        http.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(controller.GetType())
+            .LogWarning("Request {Method} {Path} failed with {StatusCode} {Code}: {Detail} (customer {CustomerId}, trace {TraceId})",
+                http.Request.Method, http.Request.Path.Value, statusCode, code, detail,
+                controller.User.GetCustomerId(), http.TraceIdentifier);
+
         var problem = controller.ProblemDetailsFactory.CreateProblemDetails(
-            controller.HttpContext, statusCode: statusCode, detail: detail);
+            http, statusCode: statusCode, detail: detail);
         problem.Extensions["code"] = code;
 
         return new ObjectResult(problem) { StatusCode = statusCode, ContentTypes = { "application/problem+json" } };

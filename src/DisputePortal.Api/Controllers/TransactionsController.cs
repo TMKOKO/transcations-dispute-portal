@@ -16,11 +16,13 @@ public class TransactionsController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly DisputeEligibility _eligibility;
+    private readonly ILogger<TransactionsController> _logger;
 
-    public TransactionsController(AppDbContext db, DisputeEligibility eligibility)
+    public TransactionsController(AppDbContext db, DisputeEligibility eligibility, ILogger<TransactionsController> logger)
     {
         _db = db;
         _eligibility = eligibility;
+        _logger = logger;
     }
 
     /// <summary>The caller's transactions, newest first, each flagged with whether it can be disputed.</summary>
@@ -65,18 +67,30 @@ public class TransactionsController : ControllerBase
             .Select(WithLatestDispute)
             .ToListAsync(ct);
 
+        // HasSearch, not the search text: it is free input and may hold anything the customer typed.
+        _logger.LogInformation(
+            "Transactions query: loaded {Count} of {Total} for customer {CustomerId} (page {Page}, size {PageSize}, from {From}, to {To}, search {HasSearch})",
+            rows.Count, total, customerId, q.Page, q.PageSize, q.From, q.To, !string.IsNullOrWhiteSpace(q.Search));
+
         var items = rows.Select(ToResponse).ToList();
         return Ok(new PagedResponse<TransactionResponse>(items, q.Page, q.PageSize, total));
     }
 
-    /// <summary>One of the caller's transactions.</summary>
-    [HttpGet("{id:guid}")]
+    /// <summary>One of the caller's transactions, by the id in the request body.</summary>
+    /// <remarks>
+    /// POST rather than <c>GET /api/transactions/{id}</c>: the id is kept out of the URL, so it does
+    /// not land in access logs, proxy logs or browser history. The call is still read-only.
+    /// </remarks>
+    [HttpPost("lookup")]
     [ProducesResponseType(typeof(TransactionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Get([FromBody] TransactionLookupRequest request, CancellationToken ct)
     {
         var customerId = User.GetCustomerId();
         if (customerId is null) return Unauthorized();
+
+        var id = request.TransactionId!.Value;
 
         // Scoped to customerId, so another customer's transaction is indistinguishable from one
         // that does not exist. Returning 403 here instead would confirm the id was real.
@@ -86,8 +100,12 @@ public class TransactionsController : ControllerBase
             .FirstOrDefaultAsync(ct);
 
         if (row is null)
+        {
+            _logger.LogInformation("Transaction lookup: {TransactionId} not found for customer {CustomerId}", id, customerId);
             return this.ProblemWithCode("Transaction not found.", StatusCodes.Status404NotFound, "transaction_not_found");
+        }
 
+        _logger.LogInformation("Transaction lookup: loaded {TransactionId} for customer {CustomerId}", id, customerId);
         return Ok(ToResponse(row));
     }
 

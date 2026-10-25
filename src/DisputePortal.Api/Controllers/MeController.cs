@@ -14,8 +14,13 @@ namespace DisputePortal.Api.Controllers;
 public class MeController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly ILogger<MeController> _logger;
 
-    public MeController(AppDbContext db) => _db = db;
+    public MeController(AppDbContext db, ILogger<MeController> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     /// <summary>The signed-in customer's profile.</summary>
     [HttpGet]
@@ -31,6 +36,13 @@ public class MeController : ControllerBase
             .FirstOrDefaultAsync(ct);
 
         // A valid token for a customer that no longer exists: treat as signed out.
-        return me is null ? Unauthorized() : Ok(me);
+        if (me is null)
+        {
+            _logger.LogWarning("Profile lookup: customer {CustomerId} from a valid token no longer exists", customerId);
+            return Unauthorized();
+        }
+
+        _logger.LogInformation("Profile lookup: loaded customer {CustomerId}", customerId);
+        return Ok(me);
     }
 }

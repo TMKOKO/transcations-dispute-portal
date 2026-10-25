@@ -44,7 +44,7 @@ public class DisputesTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var dispute = await response.ReadAsync<DisputeDetailResponse>();
-        Assert.Equal(response.Headers.Location!.AbsolutePath, $"/api/disputes/{dispute.Id}", ignoreCase: true);
+        Assert.Null(response.Headers.Location);   // no GET URL carries a dispute id
         Assert.Matches(@"^DSP-\d{4}-\d{6}$", dispute.DisputeNumber);
         Assert.Equal(DisputeStatus.Submitted, dispute.Status);
         Assert.Equal(499.99m, dispute.DisputedAmount);
@@ -56,7 +56,7 @@ public class DisputesTests : IAsyncLifetime
         Assert.Equal("customer", row.ChangedBy);
 
         // The transaction now reports the open dispute and is no longer offered for dispute.
-        var txAfter = await (await client.GetAsync($"/api/transactions/{tx.Id}")).ReadAsync<TransactionResponse>();
+        var txAfter = await (await client.PostAsJsonAsync("/api/transactions/lookup", new { transactionId = tx.Id })).ReadAsync<TransactionResponse>();
         Assert.False(txAfter.CanDispute);
         Assert.Equal(IneligibleReason.ActiveDispute, txAfter.IneligibleCode);
         Assert.Equal(dispute.Id, txAfter.LatestDispute!.Id);
@@ -236,10 +236,29 @@ public class DisputesTests : IAsyncLifetime
 
         var aDispute = await (await RaiseAsync(aClient, Body(aTx.Id))).ReadAsync<DisputeDetailResponse>();
 
-        Assert.Equal(HttpStatusCode.NotFound, (await bClient.GetAsync($"/api/disputes/{aDispute.Id}")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await bClient.PostAsync($"/api/disputes/{aDispute.Id}/withdraw", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await bClient.PostAsJsonAsync("/api/disputes/lookup", new { disputeId = aDispute.Id })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await bClient.PostAsJsonAsync("/api/disputes/withdraw", new { disputeId = aDispute.Id })).StatusCode);
         var bList = await (await bClient.GetAsync("/api/disputes")).ReadAsync<PagedResponse<DisputeSummaryResponse>>();
         Assert.Empty(bList.Items);
+    }
+
+    [Fact]
+    public async Task Dispute_ids_travel_in_the_body_not_the_url()
+    {
+        var c = await _api.CreateCustomerAsync();
+        var tx = await _api.CreateTransactionAsync(c.Id);
+        var client = await _api.CustomerClientAsync(c);
+        var dispute = await (await RaiseAsync(client, Body(tx.Id))).ReadAsync<DisputeDetailResponse>();
+
+        var found = await (await client.PostAsJsonAsync("/api/disputes/lookup", new { disputeId = dispute.Id }))
+            .ReadAsync<DisputeDetailResponse>();
+        Assert.Equal(dispute.Id, found.Id);
+
+        // A missing id is a validation error, and the old URL forms no longer exist.
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/disputes/lookup", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/disputes/withdraw", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/disputes/{dispute.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync($"/api/disputes/{dispute.Id}/withdraw", null)).StatusCode);
     }
 
     [Fact]
@@ -250,7 +269,7 @@ public class DisputesTests : IAsyncLifetime
         var client = await _api.CustomerClientAsync(c);
         var dispute = await (await RaiseAsync(client, Body(tx.Id))).ReadAsync<DisputeDetailResponse>();
 
-        var withdrawn = await client.PostAsJsonAsync($"/api/disputes/{dispute.Id}/withdraw", new { note = "Merchant refunded me." });
+        var withdrawn = await client.PostAsJsonAsync("/api/disputes/withdraw", new { disputeId = dispute.Id, note = "Merchant refunded me." });
 
         Assert.Equal(HttpStatusCode.OK, withdrawn.StatusCode);
         var body = await withdrawn.ReadAsync<DisputeDetailResponse>();
@@ -259,7 +278,7 @@ public class DisputesTests : IAsyncLifetime
         Assert.NotNull(body.ResolvedAt);
         Assert.Equal("Merchant refunded me.", body.Timeline[^1].Note);
 
-        var again = await client.PostAsync($"/api/disputes/{dispute.Id}/withdraw", null);
+        var again = await client.PostAsJsonAsync("/api/disputes/withdraw", new { disputeId = dispute.Id });
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
         Assert.Equal("invalid_transition", await again.ProblemCodeAsync());
 
@@ -276,7 +295,7 @@ public class DisputesTests : IAsyncLifetime
         var client = await _api.CustomerClientAsync(c);
         var d1 = await (await RaiseAsync(client, Body(tx1.Id))).ReadAsync<DisputeDetailResponse>();
         await RaiseAsync(client, Body(tx2.Id));
-        await client.PostAsync($"/api/disputes/{d1.Id}/withdraw", null);
+        await client.PostAsJsonAsync("/api/disputes/withdraw", new { disputeId = d1.Id });
 
         var all = await (await client.GetAsync("/api/disputes")).ReadAsync<PagedResponse<DisputeSummaryResponse>>();
         var open = await (await client.GetAsync("/api/disputes?status=Submitted")).ReadAsync<PagedResponse<DisputeSummaryResponse>>();

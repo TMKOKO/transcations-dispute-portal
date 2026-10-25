@@ -1,0 +1,40 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --color-brand-50: #eef6fb;
+  --color-brand-100: #d3e7f3;
+  --color-brand-500: #2f7fb5;
+  --color-brand-600: #1f6a9e;
+  --color-brand-700: #175682;
+  --color-brand-900: #0f3d5e;
+}
+
+@layer components {
+  .label {
+    @apply block text-sm font-medium text-slate-700;
+  }
+
+  .input {
+    @apply mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 focus:outline-none aria-[invalid=true]:border-rose-500 aria-[invalid=true]:ring-rose-500/20;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply bg-brand-700 text-white hover:bg-brand-900 focus-visible:ring-brand-500;
+  }
+
+  .btn-secondary {
+    @apply border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 focus-visible:ring-brand-500;
+  }
+
+  .btn-danger {
+    @apply bg-rose-700 text-white hover:bg-rose-800 focus-visible:ring-rose-500;
+  }
+}

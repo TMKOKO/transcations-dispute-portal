@@ -38,34 +38,26 @@ public class AuthController : ControllerBase
     {
         var email = Normalise(request.Email);
         var customer = await _db.Customers.AsNoTracking().FirstOrDefaultAsync(c => c.Email == email, ct);
+        // Never the email itself: logs are not the place to build a list of who banks here.
+        if (customer is null)
+            _logger.LogInformation("Login lookup: no matching customer");
+        else
+            _logger.LogInformation("Login lookup: customer {CustomerId} found", customer.Id);
 
         if (!Verify(request.Password, customer?.PasswordHash))
         {
-            _logger.LogWarning("Failed customer login");
+            // The real reason stays in the log; the caller gets the same 401 either way.
+            if (customer is null)
+                _logger.LogWarning("Customer login failed: no account for that email");
+            else
+                _logger.LogWarning("Customer login failed: wrong password for customer {CustomerId}", customer.Id);
+
             return this.ProblemWithCode(InvalidCredentials, StatusCodes.Status401Unauthorized, "invalid_credentials");
         }
 
         var token = _tokens.CreateCustomerToken(customer!);
+        _logger.LogInformation("Customer {CustomerId} signed in; token expires {ExpiresAt:o}", customer!.Id, token.ExpiresAt);
         return Ok(new LoginResponse(token.Token, token.ExpiresAt, customer!.FirstName, JwtTokenService.CustomerRole));
-    }
-
-    /// <summary>Back-office agent login (used from Postman; there is no agent UI).</summary>
-    [HttpPost("agent-login")]
-    [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<IActionResult> AgentLogin([FromBody] LoginRequest request, CancellationToken ct)
-    {
-        var email = Normalise(request.Email);
-        var agent = await _db.Agents.AsNoTracking().FirstOrDefaultAsync(a => a.Email == email, ct);
-
-        if (!Verify(request.Password, agent?.PasswordHash))
-        {
-            _logger.LogWarning("Failed agent login");
-            return this.ProblemWithCode(InvalidCredentials, StatusCodes.Status401Unauthorized, "invalid_credentials");
-        }
-
-        var token = _tokens.CreateAgentToken(agent!);
-        return Ok(new LoginResponse(token.Token, token.ExpiresAt, agent!.DisplayName, JwtTokenService.AgentRole));
     }
 
     private static string Normalise(string email) => email.Trim().ToLowerInvariant();
