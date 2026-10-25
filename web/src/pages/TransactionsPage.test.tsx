@@ -20,15 +20,32 @@ describe('TransactionsPage', () => {
     const [eligible, open, old] = rows as [HTMLElement, HTMLElement, HTMLElement]
     expect(within(eligible).getByRole('link', { name: /dispute computicket/i })).toHaveAttribute(
       'href',
-      '/transactions/tx-eligible/dispute',
+      '/transactions/dispute',
     )
     expect(within(eligible).getByText(/R\s?850[.,]00/)).toBeInTheDocument()
 
     expect(within(open).queryByRole('link', { name: /^dispute/i })).not.toBeInTheDocument()
-    expect(within(open).getByRole('link', { name: /view dsp-2026-001000/i })).toHaveAttribute('href', '/disputes/d-1')
+    expect(within(open).getByRole('link', { name: /view dsp-2026-001000/i })).toHaveAttribute('href', '/disputes/detail')
     expect(within(open).getByText('Under review')).toBeInTheDocument()
 
     expect(within(old).getByText('Transactions can only be disputed within 120 days.')).toBeInTheDocument()
+  })
+
+  it('opens the dispute form with the transaction id in router state, not the address', async () => {
+    let lookedUp: unknown
+    server.use(
+      http.post(api('/api/transactions/lookup'), async ({ request }) => {
+        lookedUp = await request.json()
+        return HttpResponse.json(eligibleTx)
+      }),
+    )
+    const { user } = renderApp('/transactions')
+
+    const link = await screen.findByRole('link', { name: /dispute computicket/i })
+    expect(link.getAttribute('href')).not.toContain(eligibleTx.id)
+    await user.click(link)
+
+    await waitFor(() => expect(lookedUp).toEqual({ transactionId: eligibleTx.id }))
   })
 
   it('sends the search term to the API after typing stops', async () => {

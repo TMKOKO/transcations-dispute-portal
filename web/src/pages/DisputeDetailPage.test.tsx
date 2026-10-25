@@ -1,12 +1,13 @@
 import { screen, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
+import { paths } from '../lib/routes'
 import { renderApp } from '../test/render'
 import { api, disputeDetail, server } from '../test/server'
 
 describe('DisputeDetailPage', () => {
   it('shows status, details and the timeline in order', async () => {
-    renderApp('/disputes/d-1')
+    renderApp({ pathname: paths.disputeDetail, state: { disputeId: 'd-1' } })
 
     const heading = await screen.findByRole('heading', { name: 'DSP-2026-001000' })
     expect(within(heading.parentElement!).getByText('Under review')).toBeInTheDocument()
@@ -37,7 +38,7 @@ describe('DisputeDetailPage', () => {
         })
       }),
     )
-    const { user } = renderApp('/disputes/d-1')
+    const { user } = renderApp({ pathname: paths.disputeDetail, state: { disputeId: 'd-1' } })
 
     await user.click(await screen.findByRole('button', { name: 'Withdraw dispute' }))
     const dialog = screen.getByRole('dialog', { name: 'Withdraw this dispute?' })
@@ -52,7 +53,7 @@ describe('DisputeDetailPage', () => {
 
   it('hides Withdraw for closed disputes', async () => {
     server.use(http.post(api('/api/disputes/lookup'), () => HttpResponse.json({ ...disputeDetail, status: 'Resolved', canWithdraw: false })))
-    renderApp('/disputes/d-1')
+    renderApp({ pathname: paths.disputeDetail, state: { disputeId: 'd-1' } })
 
     expect(await screen.findByText('This dispute was resolved in your favour.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Withdraw dispute' })).not.toBeInTheDocument()
@@ -60,8 +61,33 @@ describe('DisputeDetailPage', () => {
 
   it('shows not found for an unknown dispute', async () => {
     server.use(http.post(api('/api/disputes/lookup'), () => HttpResponse.json({ status: 404, detail: 'Dispute not found.' }, { status: 404 })))
-    renderApp('/disputes/missing')
+    renderApp({ pathname: paths.disputeDetail, state: { disputeId: 'missing' } })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('We could not find that dispute.')
+  })
+
+  it('sends a page opened without a dispute (bookmark, new tab) back to the list', async () => {
+    renderApp(paths.disputeDetail)
+    expect(await screen.findByRole('heading', { name: 'My disputes' })).toBeInTheDocument()
+  })
+
+  it('no longer has a page at an address with the id in it', async () => {
+    renderApp('/disputes/d-1')
+    expect(await screen.findByText("We couldn't find that page")).toBeInTheDocument()
+  })
+
+  it('keeps the dispute across a sign-in detour', async () => {
+    server.use(
+      http.post(api('/api/auth/login'), () =>
+        HttpResponse.json({ token: 't', expiresAt: new Date(Date.now() + 60_000).toISOString(), displayName: 'Thandi', role: 'customer' }),
+      ),
+    )
+    const { user } = renderApp({ pathname: paths.disputeDetail, state: { disputeId: 'd-1' } }, { signedIn: false })
+
+    await user.type(await screen.findByLabelText('Email address'), 'thandi@example.com')
+    await user.type(screen.getByLabelText('Password'), 'Demo@12345!')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByRole('heading', { name: 'DSP-2026-001000' })).toBeInTheDocument()
   })
 })

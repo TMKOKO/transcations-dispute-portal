@@ -1,11 +1,11 @@
 import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, type InitialEntry } from 'react-router'
 import { App } from '../App'
 import { createQueryClient } from '../api/queryClient'
 
-/** Render the whole app at `route`, optionally already signed in. */
-export function renderApp(route: string, { signedIn = true } = {}) {
+/** Render the whole app at `route` (a path, or a path plus router state), optionally already signed in. */
+export function renderApp(route: InitialEntry, { signedIn = true } = {}) {
   if (signedIn) {
     sessionStorage.setItem(
       'dispute-portal.session',

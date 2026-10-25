@@ -2,6 +2,7 @@ import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { Navigate, Route, Routes } from 'react-router'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './components/Layout'
+import { paths } from './lib/routes'
 import { DisputeDetailPage } from './pages/DisputeDetailPage'
 import { DisputesPage } from './pages/DisputesPage'
 import { LoginPage } from './pages/LoginPage'
@@ -14,11 +15,11 @@ export function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth />}>
-        <Route index element={<Navigate to="/transactions" replace />} />
-        <Route path="/transactions" element={<TransactionsPage />} />
-        <Route path="/transactions/:id/dispute" element={<RaiseDisputePage />} />
-        <Route path="/disputes" element={<DisputesPage />} />
-        <Route path="/disputes/:id" element={<DisputeDetailPage />} />
+        <Route index element={<Navigate to={paths.transactions} replace />} />
+        <Route path={paths.transactions} element={<TransactionsPage />} />
+        <Route path={paths.raiseDispute} element={<RaiseDisputePage />} />
+        <Route path={paths.disputes} element={<DisputesPage />} />
+        <Route path={paths.disputeDetail} element={<DisputeDetailPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

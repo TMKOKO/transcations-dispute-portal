@@ -12,14 +12,14 @@ export function LoginPage() {
   const { login, isAuthenticated, signedOutReason } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const from = (location.state as { from?: string } | null)?.from ?? '/transactions'
+  const { from = '/transactions', fromState } = (location.state as { from?: string; fromState?: unknown } | null) ?? {}
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  if (isAuthenticated) return <Navigate to={from} replace />
+  if (isAuthenticated) return <Navigate to={from} replace state={fromState} />
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -31,7 +31,7 @@ export function LoginPage() {
     setBusy(true)
     try {
       await login(email.trim(), password)
-      navigate(from, { replace: true })
+      navigate(from, { replace: true, state: fromState })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
     } finally {

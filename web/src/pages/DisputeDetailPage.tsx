@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, Navigate } from 'react-router'
 import { ApiError } from '../api/client'
 import { useDispute, useWithdrawDispute } from '../api/queries'
 import type { DisputeDetail } from '../api/types'
@@ -8,10 +8,16 @@ import { Timeline } from '../components/Timeline'
 import { Card, ErrorBanner, Spinner, StatusBadge } from '../components/ui'
 import { formatDate, formatDateTime, formatMoney } from '../lib/format'
 import { reasonLabel, statusExplainer } from '../lib/labels'
+import { paths, useStateId } from '../lib/routes'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 
 export function DisputeDetailPage() {
-  const { id = '' } = useParams()
+  const id = useStateId('disputeId')
+  if (!id) return <Navigate to={paths.disputes} replace />
+  return <DisputeLoader id={id} />
+}
+
+function DisputeLoader({ id }: { id: string }) {
   const query = useDispute(id)
   useDocumentTitle(query.data ? `Dispute ${query.data.disputeNumber}` : 'Dispute')
 
@@ -32,7 +38,7 @@ export function DisputeDetailPage() {
 
 function BackLink() {
   return (
-    <Link to="/disputes" className="mb-4 inline-block text-sm text-brand-700 hover:underline">
+    <Link to={paths.disputes} className="mb-4 inline-block text-sm text-brand-700 hover:underline">
       ← All disputes
     </Link>
   )

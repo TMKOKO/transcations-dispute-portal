@@ -4,6 +4,7 @@ import type { DisputeStatus } from '../api/types'
 import { Card, EmptyState, ErrorBanner, PageHeader, Pagination, Spinner, StatusBadge } from '../components/ui'
 import { formatDate, formatMoney } from '../lib/format'
 import { reasonLabel, statusLabel } from '../lib/labels'
+import { disputeLink } from '../lib/routes'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 
 const FILTERS: (DisputeStatus | undefined)[] = [undefined, 'Submitted', 'UnderReview', 'Resolved', 'Rejected', 'Withdrawn']
@@ -65,7 +66,7 @@ export function DisputesPage() {
             {query.data.items.map((d) => (
               <li key={d.id}>
                 <Link
-                  to={`/disputes/${d.id}`}
+                  {...disputeLink(d.id)}
                   className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-4 py-4 hover:bg-slate-50 focus-visible:bg-slate-50 sm:grid-cols-[9rem_1fr_auto_7rem]"
                 >
                   <span className="font-mono text-sm text-slate-700">{d.disputeNumber}</span>

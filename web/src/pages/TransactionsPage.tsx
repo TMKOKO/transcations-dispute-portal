@@ -5,6 +5,7 @@ import type { Transaction } from '../api/types'
 import { EmptyState, ErrorBanner, Money, PageHeader, Pagination, Spinner, StatusBadge, Card } from '../components/ui'
 import { formatDate, formatMoney, todaySast } from '../lib/format'
 import { channelLabel } from '../lib/labels'
+import { disputeLink, raiseDisputeLink } from '../lib/routes'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 
 const PAGE_SIZE = 15
@@ -160,14 +161,14 @@ function TransactionRow({ transaction: t }: { transaction: Transaction }) {
       <div className="order-4 col-span-2 sm:order-none sm:col-span-1 sm:text-right">
         {t.canDispute ? (
           <Link
-            to={`/transactions/${t.id}/dispute`}
+            {...raiseDisputeLink(t.id)}
             className="btn-secondary w-full sm:w-auto"
             aria-label={`Dispute ${t.merchantName} payment of ${formatMoney(t.amount, t.currency)} on ${formatDate(t.transactionDate)}`}
           >
             Dispute
           </Link>
         ) : open && t.latestDispute ? (
-          <Link to={`/disputes/${t.latestDispute.id}`} className="inline-flex items-center gap-2 text-sm text-brand-700 hover:underline">
+          <Link {...disputeLink(t.latestDispute.id)} className="inline-flex items-center gap-2 text-sm text-brand-700 hover:underline">
             <StatusBadge status={t.latestDispute.status} />
             <span>View {t.latestDispute.disputeNumber}</span>
           </Link>

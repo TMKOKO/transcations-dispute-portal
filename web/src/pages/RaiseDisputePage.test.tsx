@@ -2,10 +2,14 @@ import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import type { RaiseDisputeBody } from '../api/types'
+import { paths } from '../lib/routes'
 import { renderApp } from '../test/render'
 import { api, disputeDetail, server } from '../test/server'
 
 const validDescription = 'I was charged twice for the same concert ticket.'
+
+/** The transaction id rides in router state, as the Dispute links on the transactions page send it. */
+const raiseDisputeRoute = (transactionId: string) => ({ pathname: paths.raiseDispute, state: { transactionId } })
 
 async function fillAndContinue(user: ReturnType<typeof renderApp>['user'], amount?: string) {
   await user.click(await screen.findByRole('radio', { name: /charged more than once/i }))
@@ -20,7 +24,7 @@ async function fillAndContinue(user: ReturnType<typeof renderApp>['user'], amoun
 
 describe('RaiseDisputePage', () => {
   it('validates on Continue and points at each problem', async () => {
-    const { user } = renderApp('/transactions/tx-eligible/dispute')
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
     await screen.findByRole('heading', { name: 'Raise a dispute' })
 
     const amount = screen.getByLabelText("Amount you're disputing")
@@ -46,7 +50,7 @@ describe('RaiseDisputePage', () => {
         return HttpResponse.json({ ...disputeDetail, id: 'd-new', disputeNumber: 'DSP-2026-001042', status: 'Submitted' }, { status: 201 })
       }),
     )
-    const { user } = renderApp('/transactions/tx-eligible/dispute')
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
 
     await fillAndContinue(user, '425.5')
 
@@ -56,7 +60,7 @@ describe('RaiseDisputePage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Dispute submitted' })).toBeInTheDocument()
     expect(screen.getByText('DSP-2026-001042')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Track this dispute' })).toHaveAttribute('href', '/disputes/d-new')
+    expect(screen.getByRole('link', { name: 'Track this dispute' })).toHaveAttribute('href', '/disputes/detail')
     expect(body).toEqual({
       transactionId: 'tx-eligible',
       reason: 'DuplicateCharge',
@@ -76,7 +80,7 @@ describe('RaiseDisputePage', () => {
           : HttpResponse.json({ ...disputeDetail, status: 'Submitted' }, { status: 201 })
       }),
     )
-    const { user } = renderApp('/transactions/tx-eligible/dispute')
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
     await fillAndContinue(user)
 
     await user.click(await screen.findByRole('button', { name: 'Submit dispute' }))
@@ -97,7 +101,7 @@ describe('RaiseDisputePage', () => {
         ),
       ),
     )
-    const { user } = renderApp('/transactions/tx-eligible/dispute')
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
     await fillAndContinue(user)
     await user.click(await screen.findByRole('button', { name: 'Submit dispute' }))
 
@@ -106,7 +110,7 @@ describe('RaiseDisputePage', () => {
   })
 
   it('explains why an ineligible transaction cannot be disputed', async () => {
-    renderApp('/transactions/tx-old/dispute')
+    renderApp(raiseDisputeRoute('tx-old'))
 
     expect(await screen.findByRole('heading', { name: "This transaction can't be disputed" })).toBeInTheDocument()
     expect(screen.getByText('Transactions can only be disputed within 120 days.')).toBeInTheDocument()
@@ -114,7 +118,12 @@ describe('RaiseDisputePage', () => {
   })
 
   it('handles an unknown transaction', async () => {
-    renderApp('/transactions/nope/dispute')
+    renderApp(raiseDisputeRoute('nope'))
     expect(await screen.findByRole('alert')).toHaveTextContent('We could not find that transaction.')
+  })
+
+  it('sends a page opened without a transaction (bookmark, new tab) back to the list', async () => {
+    renderApp(paths.raiseDispute)
+    expect(await screen.findByRole('heading', { name: 'Transactions' })).toBeInTheDocument()
   })
 })

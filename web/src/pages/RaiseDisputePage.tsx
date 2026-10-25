@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type FormEvent } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, Navigate } from 'react-router'
 import { ApiError } from '../api/client'
 import { useDisputeReasons, useRaiseDispute, useTransaction } from '../api/queries'
 import type { DisputeDetail, DisputeReason, Transaction } from '../api/types'
@@ -13,11 +13,17 @@ import {
 } from '../lib/disputeRules'
 import { formatDate, formatMoney } from '../lib/format'
 import { channelLabel, reasonLabel } from '../lib/labels'
+import { disputeLink, paths, useStateId } from '../lib/routes'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 
 export function RaiseDisputePage() {
   useDocumentTitle('Raise a dispute')
-  const { id = '' } = useParams()
+  const id = useStateId('transactionId')
+  if (!id) return <Navigate to={paths.transactions} replace />
+  return <TransactionLoader id={id} />
+}
+
+function TransactionLoader({ id }: { id: string }) {
   const query = useTransaction(id)
 
   if (query.isPending) return <Spinner label="Loading transaction" />
@@ -38,7 +44,7 @@ export function RaiseDisputePage() {
 
 function BackLink() {
   return (
-    <Link to="/transactions" className="mb-4 inline-block text-sm text-brand-700 hover:underline">
+    <Link to={paths.transactions} className="mb-4 inline-block text-sm text-brand-700 hover:underline">
       ← Back to transactions
     </Link>
   )
@@ -68,7 +74,7 @@ function DisputeFlow({ transaction: tx }: { transaction: Transaction }) {
           <TransactionSummary tx={tx} />
           <p className="mt-4 text-sm text-slate-700">{tx.ineligibleMessage}</p>
           {tx.latestDispute && (
-            <Link to={`/disputes/${tx.latestDispute.id}`} className="btn-secondary mt-4">
+            <Link {...disputeLink(tx.latestDispute.id)} className="btn-secondary mt-4">
               View dispute {tx.latestDispute.disputeNumber}
             </Link>
           )}
@@ -141,7 +147,7 @@ function DisputeFlow({ transaction: tx }: { transaction: Transaction }) {
           status as our team reviews it.
         </p>
         <div className="mt-6 flex flex-col justify-center gap-2 sm:flex-row">
-          <Link to={`/disputes/${created.id}`} className="btn-primary">
+          <Link {...disputeLink(created.id)} className="btn-primary">
             Track this dispute
           </Link>
           <Link to="/transactions" className="btn-secondary">

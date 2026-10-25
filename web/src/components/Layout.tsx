@@ -6,7 +6,7 @@ import { useAuth } from '../auth/AuthContext'
 export function RequireAuth() {
   const { isAuthenticated } = useAuth()
   const location = useLocation()
-  if (!isAuthenticated) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
+  if (!isAuthenticated) return <Navigate to="/login" replace state={{ from: location.pathname + location.search, fromState: location.state }} />
   return <Layout />
 }
 
