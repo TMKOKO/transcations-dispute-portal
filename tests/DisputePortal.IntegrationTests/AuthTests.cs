@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using DisputePortal.Api.DTOs;
 using DisputePortal.IntegrationTests.Infrastructure;
+using Microsoft.Extensions.Logging;
 
 namespace DisputePortal.IntegrationTests;
 
@@ -119,5 +120,7 @@ public class RateLimitTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.Equal("rate_limited", await limited.ProblemCodeAsync());
         Assert.True(limited.Headers.Contains("Retry-After"));
+        Assert.Contains(_api.Logs.GetSnapshot(), r => r.Level == LogLevel.Warning
+                                                   && r.Message.Contains("429 rate_limited: auth limit reached"));
     }
 }

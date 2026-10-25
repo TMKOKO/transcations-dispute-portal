@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: dispute-portal
+    folder: Dispute Portal
+    type: file
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards

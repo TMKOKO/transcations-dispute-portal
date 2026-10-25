@@ -144,6 +144,15 @@ builder.Services.AddRateLimiter(options =>
 
     options.OnRejected = async (context, token) =>
     {
+        // Rejected before any controller runs, so ProblemResults never sees it. Same wording as its
+        // failure log so dashboards count 429s alongside every other code. No IP: it is personal data.
+        var http = context.HttpContext;
+        http.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("DisputePortal.Api.RateLimiting")
+            .LogWarning("Request {Method} {Path} failed with {StatusCode} {Code}: {Limit} limit reached (trace {TraceId})",
+                http.Request.Method, http.Request.Path.Value, StatusCodes.Status429TooManyRequests, "rate_limited",
+                IsCredentialPath(http.Request) ? "auth" : "general", http.TraceIdentifier);
+
         context.HttpContext.Response.Headers.RetryAfter = "60";
         await context.HttpContext.Response.WriteAsJsonAsync(new
         {
@@ -217,7 +226,7 @@ using (var scope = app.Services.CreateScope())
         await DbSeeder.SeedAsync(db, scope.ServiceProvider.GetRequiredService<TimeProvider>(), app.Logger);
 }
 
-// Outermost, so the headers land on error responses too.
+// Outermost, so the headers land on error responses too. LIFO
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
 // A malformed body that reaches an unexpected code path would otherwise surface as a bare 500
