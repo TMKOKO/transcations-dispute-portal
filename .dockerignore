@@ -1,0 +1,11 @@
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/.vs
+**/TestResults
+.git
+web
+tests
+docs
+observability

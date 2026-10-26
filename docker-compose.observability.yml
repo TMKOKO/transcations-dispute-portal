@@ -1,0 +1,75 @@
+# Local dashboards on top of the API stack: Grafana + Loki (logs) + Alloy (ships the API's logs).
+# From the repository root:
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d
+# Grafana: http://localhost:3001 (admin / admin). See observability/README.md.
+services:
+  api:
+    environment:
+      # One JSON object per line, so Loki can split out Code, CustomerId, TraceId etc.
+      # Program.cs already does this outside Development; compose runs Development for the demo seed.
+      Logging__Console__FormatterName: json
+      Logging__Console__FormatterOptions__IncludeScopes: "true"
+
+  # Creates the read-only database user Grafana connects as, once the API has migrated the schema.
+  grafana-db-user:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: disputes
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local-only}
+    volumes:
+      - ./observability/postgres:/scripts:ro
+    entrypoint: ["sh", "/scripts/create-grafana-reader.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  loki:
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - lokidata:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.4.3
+    command: ["run", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only access to container logs. Local only: the Docker socket is root on the host.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    ports:
+      # 3000 is the portal.
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/dispute-portal.json
+      # Read by the datasource provisioning file.
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local-only}
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      loki:
+        condition: service_started
+      grafana-db-user:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  lokidata:
+  grafanadata:

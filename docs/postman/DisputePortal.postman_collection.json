@@ -1,0 +1,531 @@
+{
+  "info": {
+    "name": "Dispute Portal API",
+    "description": "Every endpoint of the Dispute Portal API.\n\nRun top to bottom: the login requests save their tokens, 'List transactions' saves the first disputable transaction, and 'Raise dispute' saves the new dispute, so later requests work without copying ids by hand.\n\nSaved values go into the selected environment, or into collection variables when no environment is selected.\n\nDemo accounts (Development seed): every account uses the password Demo@12345!",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{customerToken}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "customerEmail", "value": "thandi@example.com" },
+    { "key": "otherCustomerEmail", "value": "sipho@example.com" },
+    { "key": "password", "value": "Demo@12345!" },
+    { "key": "customerToken", "value": "" },
+    { "key": "otherCustomerToken", "value": "" },
+    { "key": "transactionId", "value": "" },
+    { "key": "transactionAmount", "value": "" },
+    { "key": "disputeId", "value": "" },
+    { "key": "idempotencyKey", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "auth": { "type": "noauth" },
+      "item": [
+        {
+          "name": "Customer login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const save = (k, v) => pm.environment.name ? pm.environment.set(k, v) : pm.collectionVariables.set(k, v);",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('role is customer', () => pm.expect(body.role).to.eql('customer'));",
+                  "save('customerToken', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Returns a 30-minute JWT (role=customer, customerId claim). Rate limited to 10 requests per minute per client."
+          }
+        },
+        {
+          "name": "Other customer login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const save = (k, v) => pm.environment.name ? pm.environment.set(k, v) : pm.collectionVariables.set(k, v);",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "save('otherCustomerToken', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{otherCustomerEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "A second customer, used by 'Security checks' to show one customer cannot reach another's data."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Customer",
+      "item": [
+        {
+          "name": "Get my profile",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/me",
+            "description": "The signed-in customer's id, name and email."
+          }
+        },
+        {
+          "name": "List transactions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const save = (k, v) => pm.environment.name ? pm.environment.set(k, v) : pm.collectionVariables.set(k, v);",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const tx = pm.response.json().items.find(t => t.canDispute);",
+                  "if (tx) {",
+                  "  save('transactionId', tx.id);",
+                  "  save('transactionAmount', tx.amount);",
+                  "  console.log('Saved disputable transaction', tx.reference, tx.merchantName, tx.amount);",
+                  "} else {",
+                  "  console.warn('No disputable transaction on this page; try page 2 or a search.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/transactions?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transactions"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20", "description": "1-100" },
+                { "key": "from", "value": "2026-01-01", "description": "Inclusive SAST date (yyyy-MM-dd)", "disabled": true },
+                { "key": "to", "value": "2026-12-31", "description": "Inclusive SAST date (yyyy-MM-dd)", "disabled": true },
+                { "key": "search", "value": "Computicket", "description": "Merchant name or reference, case-insensitive", "disabled": true }
+              ]
+            },
+            "description": "Newest first. Each item has canDispute, plus ineligibleCode/ineligibleMessage when it cannot be disputed. Saves the first disputable transaction into transactionId."
+          }
+        },
+        {
+          "name": "Look up transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the requested transaction', () => pm.expect(pm.response.json().id).to.eql(pm.variables.get('transactionId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{transactionId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/transactions/lookup",
+            "description": "POST with the id in the body rather than GET /api/transactions/{id}, so the id stays out of URLs, access logs and browser history. Another customer's transaction is 404."
+          }
+        },
+        {
+          "name": "List dispute reasons",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/dispute-reasons",
+            "description": "Reason codes with display wording: Unauthorised, DuplicateCharge, IncorrectAmount, GoodsNotReceived, CancelledSubscription, Other."
+          }
+        },
+        {
+          "name": "Raise dispute",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh key per new dispute. 'Raise dispute (replay)' reuses it.",
+                  "const save = (k, v) => pm.environment.name ? pm.environment.set(k, v) : pm.collectionVariables.set(k, v);",
+                  "save('idempotencyKey', pm.variables.replaceIn('{{$guid}}').replace(/-/g, ''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const save = (k, v) => pm.environment.name ? pm.environment.set(k, v) : pm.collectionVariables.set(k, v);",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('status is Submitted', () => pm.expect(body.status).to.eql('Submitted'));",
+                  "save('disputeId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idempotencyKey}}", "description": "Required: 8-100 chars of [A-Za-z0-9_-]" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{transactionId}}\",\n  \"reason\": \"DuplicateCharge\",\n  \"description\": \"I was charged twice for the same purchase.\",\n  \"disputedAmount\": {{transactionAmount}}\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes",
+            "description": "description: 20-1000 characters after trimming. disputedAmount: > 0, at most 2 decimals, and no more than the transaction amount. Errors: 404 transaction_not_found, 409 when an open dispute exists, 422 when the transaction is ineligible."
+          }
+        },
+        {
+          "name": "Raise dispute (replay same key)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK, not a second dispute', () => pm.response.to.have.status(200));",
+                  "pm.test('Idempotent-Replayed header', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));",
+                  "pm.test('same dispute returned', () => pm.expect(pm.response.json().id).to.eql(pm.variables.get('disputeId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{transactionId}}\",\n  \"reason\": \"DuplicateCharge\",\n  \"description\": \"I was charged twice for the same purchase.\",\n  \"disputedAmount\": {{transactionAmount}}\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes",
+            "description": "Sends the same Idempotency-Key again, as a double-clicked submit would. The API returns the original dispute with 200 and Idempotent-Replayed: true instead of creating another."
+          }
+        },
+        {
+          "name": "List my disputes",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "disputes"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20", "description": "1-100" },
+                { "key": "status", "value": "Submitted", "description": "Submitted | UnderReview | Resolved | Rejected | Withdrawn", "disabled": true }
+              ]
+            },
+            "description": "The caller's disputes, newest first."
+          }
+        },
+        {
+          "name": "Look up dispute",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('the requested dispute', () => pm.expect(body.id).to.eql(pm.variables.get('disputeId')));",
+                  "pm.test('has a timeline', () => pm.expect(body.timeline).to.be.an('array').that.is.not.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disputeId\": \"{{disputeId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes/lookup",
+            "description": "One dispute with its status timeline and canWithdraw. POST with the id in the body, so it stays out of URLs and logs."
+          }
+        },
+        {
+          "name": "Withdraw dispute",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status is Withdrawn', () => pm.expect(pm.response.json().status).to.eql('Withdrawn'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disputeId\": \"{{disputeId}}\",\n  \"note\": \"The merchant refunded me directly.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes/withdraw",
+            "description": "Allowed while Submitted or UnderReview. disputeId is required; note is optional, at most 500 characters. Withdrawing frees the transaction to be disputed again."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Security checks",
+      "item": [
+        {
+          "name": "Wrong password is 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"not-the-password\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Same message for an unknown email and a wrong password, so the response does not reveal which emails have accounts."
+          }
+        },
+        {
+          "name": "No token is 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/disputes"
+          }
+        },
+        {
+          "name": "Another customer's dispute is 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404, not 403, so the id is not confirmed to exist', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{otherCustomerToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disputeId\": \"{{disputeId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes/lookup",
+            "description": "Sipho's token asking for Thandi's dispute. Queries are scoped to the token's customerId, so this looks exactly like a dispute that does not exist."
+          }
+        },
+        {
+          "name": "Another customer's transaction is 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 transaction_not_found', () => {",
+                  "  pm.response.to.have.status(404);",
+                  "  pm.expect(pm.response.json().code).to.eql('transaction_not_found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{otherCustomerToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{transactionId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/transactions/lookup",
+            "description": "Sipho's token asking for Thandi's transaction: indistinguishable from one that does not exist."
+          }
+        },
+        {
+          "name": "Lookup without an id is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 with a disputeId field error', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().errors).to.have.property('disputeId');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": "{{baseUrl}}/api/disputes/lookup",
+            "description": "The id is required in the body; a missing one is a validation error rather than a lookup of an empty id."
+          }
+        },
+        {
+          "name": "Ids in the URL are not accepted (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404: there is no GET /api/disputes/{id} route', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/disputes/{{disputeId}}",
+            "description": "The old URL form. Lookups are POST with the id in the body, so ids never appear in URLs, access logs or browser history."
+          }
+        },
+        {
+          "name": "Missing Idempotency-Key is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{transactionId}}\",\n  \"reason\": \"DuplicateCharge\",\n  \"description\": \"I was charged twice for the same purchase.\",\n  \"disputedAmount\": 1\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes"
+          }
+        },
+        {
+          "name": "Withdrawing twice is 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disputeId\": \"{{disputeId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes/withdraw",
+            "description": "The dispute was withdrawn above, and a closed dispute can no longer change: 409 invalid_transition."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "auth": { "type": "noauth" },
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health",
+            "description": "Healthy when the API can reach the database."
+          }
+        }
+      ]
+    }
+  ]
+}
