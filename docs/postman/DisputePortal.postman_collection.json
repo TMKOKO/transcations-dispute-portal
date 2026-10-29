@@ -293,6 +293,28 @@
           }
         },
         {
+          "name": "Withdraw with a too-short note is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('one message, on note only', () => { const e = pm.response.json().errors; pm.expect(Object.keys(e)).to.eql(['note']); pm.expect(e.note).to.have.lengthOf(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"disputeId\": \"{{disputeId}}\",\n  \"note\": \"ok\"\n}" },
+            "url": "{{baseUrl}}/api/disputes/withdraw",
+            "description": "The note is optional, but 5-500 characters when given (blank counts as no note). Nothing changes: the next request still withdraws the open dispute."
+          }
+        },
+        {
           "name": "Withdraw dispute",
           "event": [
             {
@@ -314,7 +336,7 @@
               "raw": "{\n  \"disputeId\": \"{{disputeId}}\",\n  \"note\": \"The merchant refunded me directly.\"\n}"
             },
             "url": "{{baseUrl}}/api/disputes/withdraw",
-            "description": "Allowed while Submitted or UnderReview. disputeId is required; note is optional, at most 500 characters. Withdrawing frees the transaction to be disputed again."
+            "description": "Allowed while Submitted or UnderReview. disputeId is required; note is optional, 5-500 characters of plain text when given. Withdrawing frees the transaction to be disputed again."
           }
         }
       ]
@@ -524,6 +546,146 @@
             },
             "url": "{{baseUrl}}/api/disputes/withdraw",
             "description": "The dispute was withdrawn above, and a closed dispute can no longer change: 409 invalid_transition."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Validation (fail fast)",
+      "description": "Bad input is a 400 before any database work. Each field reports only the first rule it broke, keyed by its JSON name. Free text rejects control characters and invisible bidi overrides; line breaks are allowed in the description and note.",
+      "item": [
+        {
+          "name": "One message per field",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('one message, on description only', () => { const e = pm.response.json().errors; pm.expect(Object.keys(e)).to.eql(['description']); pm.expect(e.description).to.have.lengthOf(1); });",
+                  "pm.test('names the first broken rule, not the value', () => pm.expect(pm.response.json().errors.description[0]).to.not.include('bad'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "postman-validation-check" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{transactionId}}\",\n  \"reason\": \"Other\",\n  \"description\": \"bad\\u0000\",\n  \"disputedAmount\": 10\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes",
+            "description": "The description is both too short and holds a NUL character: two broken rules, one message."
+          }
+        },
+        {
+          "name": "Invisible characters in a description are 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('one message, on description only', () => { const e = pm.response.json().errors; pm.expect(Object.keys(e)).to.eql(['description']); pm.expect(e.description).to.have.lengthOf(1); });",
+                  "pm.test('says why', () => pm.expect(pm.response.json().errors.description[0]).to.include(\"characters that aren't allowed\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "postman-validation-check" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{transactionId}}\",\n  \"reason\": \"Other\",\n  \"description\": \"I was charged twice \\u202efor the same purchase.\",\n  \"disputedAmount\": 10\n}"
+            },
+            "url": "{{baseUrl}}/api/disputes",
+            "description": "U+202E reverses the text after it, so what an agent reads is not what was sent."
+          }
+        },
+        {
+          "name": "Control characters in search are 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('one message, on search only', () => { const e = pm.response.json().errors; pm.expect(Object.keys(e)).to.eql(['search']); pm.expect(e.search).to.have.lengthOf(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/transactions?search=comp%09uticket",
+            "description": "A tab (%09) in the search text."
+          }
+        },
+        {
+          "name": "Login email with a control character is 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('one message, on email only', () => { const e = pm.response.json().errors; pm.expect(Object.keys(e)).to.eql(['email']); pm.expect(e.email).to.have.lengthOf(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\\u0000\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login"
+          }
+        },
+        {
+          "name": "Login email over 254 characters is 400",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.variables.set('longEmail', 'a'.repeat(243) + '@example.com');"]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('one message, on email only', () => { const e = pm.response.json().errors; pm.expect(Object.keys(e)).to.eql(['email']); pm.expect(e.email).to.have.lengthOf(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{longEmail}}\",\n  \"password\": \"{{password}}\"\n}" },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "254 is the longest address SMTP allows (RFC 5321)."
           }
         }
       ]
