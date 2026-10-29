@@ -21,6 +21,32 @@ describe('LoginPage', () => {
     expect(screen.getByText('Hi, Thandi')).toBeInTheDocument()
   })
 
+  it('checks the fields before calling the API, and points at the first problem', async () => {
+    let calls = 0
+    server.use(
+      http.post(api('/api/auth/login'), () => {
+        calls++
+        return HttpResponse.json({ displayName: 'Thandi', role: 'customer', idleTimeoutSeconds: 300 })
+      }),
+    )
+    const { user } = renderApp('/login', { signedIn: false })
+
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(screen.getByLabelText('Email address')).toHaveAccessibleDescription('Enter your email address.')
+    expect(screen.getByLabelText('Password')).toHaveAccessibleDescription('Enter your password.')
+    expect(screen.getByLabelText('Email address')).toHaveFocus()
+
+    await user.type(screen.getByLabelText('Email address'), 'thandi@')
+    await user.type(screen.getByLabelText('Password'), 'Demo@12345!')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(screen.getByLabelText('Email address')).toHaveAccessibleDescription('Enter a valid email address, like name@example.com.')
+    expect(screen.getByLabelText('Email address')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText('Password')).not.toHaveAttribute('aria-invalid')
+    expect(calls).toBe(0)
+  })
+
   it('shows the API message for bad credentials and stays on the page', async () => {
     server.use(
       http.post(api('/api/auth/login'), () =>

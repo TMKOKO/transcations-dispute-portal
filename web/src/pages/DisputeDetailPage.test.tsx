@@ -51,6 +51,33 @@ describe('DisputeDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'Withdraw dispute' })).not.toBeInTheDocument()
   })
 
+  it('keeps the dialog open and sends nothing when the note is too short', async () => {
+    let calls = 0
+    server.use(
+      http.post(api('/api/disputes/withdraw'), () => {
+        calls++
+        return HttpResponse.json({ ...disputeDetail, status: 'Withdrawn', canWithdraw: false })
+      }),
+    )
+    const { user } = renderApp({ pathname: paths.disputeDetail, state: { disputeId: 'd-1' } })
+
+    await user.click(await screen.findByRole('button', { name: 'Withdraw dispute' }))
+    const dialog = screen.getByRole('dialog', { name: 'Withdraw this dispute?' })
+    const note = within(dialog).getByLabelText('Reason (optional)')
+    await user.type(note, 'ok')
+    await user.click(within(dialog).getByRole('button', { name: 'Withdraw dispute' }))
+
+    expect(note).toHaveAccessibleDescription(/at least 5 characters, or leave it blank/)
+    expect(dialog).toBeVisible()
+    expect(calls).toBe(0)
+
+    // Blank is fine: the note is optional.
+    await user.clear(note)
+    await user.click(within(dialog).getByRole('button', { name: 'Withdraw dispute' }))
+    expect(await screen.findByText('Your dispute has been withdrawn.')).toBeInTheDocument()
+    expect(calls).toBe(1)
+  })
+
   it('hides Withdraw for closed disputes', async () => {
     server.use(http.post(api('/api/disputes/lookup'), () => HttpResponse.json({ ...disputeDetail, status: 'Resolved', canWithdraw: false })))
     renderApp({ pathname: paths.disputeDetail, state: { disputeId: 'd-1' } })

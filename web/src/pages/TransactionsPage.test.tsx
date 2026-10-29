@@ -66,6 +66,71 @@ describe('TransactionsPage', () => {
     expect(seen.filter((s) => s.startsWith('c')).length).toBeLessThanOrEqual(2)
   })
 
+  describe('date filters', () => {
+    function recordFilters() {
+      const seen: { from: string | null; to: string | null }[] = []
+      server.use(
+        http.get(api('/api/transactions'), ({ request }) => {
+          const params = new URL(request.url).searchParams
+          seen.push({ from: params.get('from'), to: params.get('to') })
+          return HttpResponse.json(paged([eligibleTx]))
+        }),
+      )
+      return seen
+    }
+
+    it('reads day/month/year whatever the browser language', async () => {
+      renderApp('/transactions')
+      await screen.findByRole('list', { name: 'Transactions' })
+
+      expect(screen.getByLabelText('From')).toHaveAttribute('placeholder', 'dd/mm/yyyy')
+      expect(screen.getByLabelText('To')).toHaveAttribute('placeholder', 'dd/mm/yyyy')
+    })
+
+    it('sends a typed dd/mm/yyyy date to the API as yyyy-MM-dd', async () => {
+      const seen = recordFilters()
+      const { user } = renderApp('/transactions')
+      await screen.findByRole('list', { name: 'Transactions' })
+
+      await user.type(screen.getByLabelText('From'), '5/1/2026')
+      await user.tab()
+
+      await waitFor(() => expect(seen).toContainEqual({ from: '2026-01-05', to: null }))
+      expect(screen.getByLabelText('From')).toHaveValue('05/01/2026')
+    })
+
+    it('shows a date from the address as dd/mm/yyyy', async () => {
+      renderApp('/transactions?from=2026-01-05&to=2026-02-13')
+      await screen.findByRole('list', { name: 'Transactions' })
+
+      expect(screen.getByLabelText('From')).toHaveValue('05/01/2026')
+      expect(screen.getByLabelText('To')).toHaveValue('13/02/2026')
+    })
+
+    it('explains a date that does not exist and does not filter on it', async () => {
+      const seen = recordFilters()
+      const { user } = renderApp('/transactions')
+      await screen.findByRole('list', { name: 'Transactions' })
+
+      await user.type(screen.getByLabelText('From'), '31/02/2026')
+      await user.tab()
+
+      expect(screen.getByLabelText('From')).toHaveAttribute('aria-invalid', 'true')
+      expect(screen.getByLabelText('From')).toHaveAccessibleDescription('Enter a date as dd/mm/yyyy.')
+      expect(seen.every((s) => s.from === null)).toBe(true)
+    })
+
+    it('Clear empties both dates', async () => {
+      const { user } = renderApp('/transactions?from=2026-01-05&to=2026-02-13')
+      await screen.findByRole('list', { name: 'Transactions' })
+
+      await user.click(screen.getByRole('button', { name: 'Clear' }))
+
+      expect(screen.getByLabelText('From')).toHaveValue('')
+      expect(screen.getByLabelText('To')).toHaveValue('')
+    })
+  })
+
   it('shows an empty state for filters with no results', async () => {
     server.use(http.get(api('/api/transactions'), () => HttpResponse.json(paged([]))))
     renderApp('/transactions?search=nothing')

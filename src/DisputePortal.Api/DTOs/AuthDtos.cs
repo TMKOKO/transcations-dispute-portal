@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using DisputePortal.Api.Helpers;
 
 namespace DisputePortal.Api.DTOs;
 
@@ -6,7 +7,9 @@ public class LoginRequest
 {
     [Required]
     [EmailAddress]
-    [StringLength(200)]
+    [PlainText]
+    // 254: the longest address SMTP allows (RFC 5321).
+    [StringLength(254)]
     public string Email { get; set; } = "";
 
     // Upper bound only: BCrypt ignores input past 72 bytes, and an unbounded field lets a caller

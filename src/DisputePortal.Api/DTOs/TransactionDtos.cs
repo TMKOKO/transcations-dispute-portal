@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using DisputePortal.Api.Helpers;
 using DisputePortal.Api.Models;
 using DisputePortal.Api.Services;
 
@@ -13,6 +14,7 @@ public class TransactionQuery : IValidatableObject
     public DateOnly? To { get; set; }
 
     /// <summary>Matches merchant name or reference, case-insensitive.</summary>
+    [PlainText]
     [StringLength(100)]
     public string? Search { get; set; }
 

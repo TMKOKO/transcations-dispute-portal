@@ -52,6 +52,16 @@ export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: (
   )
 }
 
+/** The message under a form field; point the field's aria-describedby at the same id. */
+export function FieldError({ id, message }: { id: string; message?: string }) {
+  if (!message) return null
+  return (
+    <p id={id} className="mt-1.5 text-sm text-rose-700">
+      {message}
+    </p>
+  )
+}
+
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">

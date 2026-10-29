@@ -40,6 +40,20 @@ describe('RaiseDisputePage', () => {
     expect(screen.getByLabelText('Describe what happened')).toHaveAttribute('aria-invalid', 'true')
   })
 
+  it('flags invisible characters pasted into the description', async () => {
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
+    await user.click(await screen.findByRole('radio', { name: /charged more than once/i }))
+    const description = screen.getByLabelText('Describe what happened')
+    await user.click(description)
+    // U+202E flips the text that follows, so what an agent reads is not what was typed.
+    await user.paste(`I was charged twice ‮for the same concert ticket.`)
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(description).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByText(/special or invisible characters/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument()
+  })
+
   it('reviews then submits with an idempotency key, and shows the reference', async () => {
     let body: RaiseDisputeBody | undefined
     let key: string | null = null

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using DisputePortal.Api.Helpers;
 using DisputePortal.Api.Models;
 
 namespace DisputePortal.Api.DTOs;
@@ -20,6 +21,7 @@ public class RaiseDisputeRequest : IValidatableObject
     public DisputeReason? Reason { get; set; }
 
     [Required]
+    [PlainText(AllowLineBreaks = true)]
     [StringLength(DescriptionMaxLength, MinimumLength = DescriptionMinLength,
         ErrorMessage = "Description must be between 20 and 1000 characters.")]
     public string Description { get; set; } = "";
@@ -64,13 +66,27 @@ public class DisputeLookupRequest
     public Guid? DisputeId { get; set; }
 }
 
-public class WithdrawDisputeRequest
+public class WithdrawDisputeRequest : IValidatableObject
 {
+    // Mirrored in web/src/lib/disputeRules.ts (NOTE_MIN, NOTE_MAX); change both together.
+    public const int NoteMinLength = 5;
+    public const int NoteMaxLength = 500;
+
     [Required]
     public Guid? DisputeId { get; set; }
 
-    [StringLength(500)]
+    /// <summary>Optional. Blank or whitespace counts as no note.</summary>
+    [PlainText(AllowLineBreaks = true)]
+    [StringLength(NoteMaxLength, ErrorMessage = "Note must be between 5 and 500 characters.")]
     public string? Note { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        // A note is optional, but one that is there has to say something.
+        var trimmed = Note?.Trim() ?? "";
+        if (trimmed.Length is > 0 and < NoteMinLength)
+            yield return new ValidationResult("Note must be between 5 and 500 characters.", [nameof(Note)]);
+    }
 }
 
 public record TransactionBrief(Guid Id, string Reference, string MerchantName, decimal Amount, string Currency, DateTime TransactionDate)
