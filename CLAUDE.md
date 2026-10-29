@@ -16,7 +16,7 @@ dotnet test tests/DisputePortal.IntegrationTests --filter "FullyQualifiedName~Di
 dotnet tool restore && dotnet ef migrations add <Name> --project src/DisputePortal.Api --output-dir Data/Migrations
 ```
 
-Run the two test projects separately rather than the whole solution at once; on this machine a combined run has been killed for low memory.
+Run the two test projects separately rather than the whole solution at once; on this machine a combined run has been killed for low memory. There is no CI (`.github/workflows` is empty), so these local runs are the only check before a PR.
 
 Local stack:
 
@@ -35,6 +35,7 @@ npm run dev          # Vite on :5173 (already in the API's CORS list)
 npm test             # vitest + msw, jsdom
 npx vitest run src/pages/LoginPage.test.tsx
 npm run typecheck && npm run lint
+npm run build        # tsc + vite build (what the web Dockerfile runs)
 ```
 
 Postman: `docs/postman/` (collection + local environment, see its README). Headless run: `npx newman@6.2.1 run docs/postman/DisputePortal.postman_collection.json -e docs/postman/DisputePortal.local.postman_environment.json`.
@@ -99,6 +100,7 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - Every API response (except 401/503 and the login/logout calls) pushes the deadline back, mirroring the server's idle timer. The portal signs out at that deadline or on any 401. Sign out calls `POST /api/auth/logout`.
 - Only the customer may cause API calls: refetch on window focus or reconnect is off (`src/api/queryClient.ts`), because any request keeps the session alive. The deadline is also checked when the tab becomes visible or focused, because background-tab timers fire late.
 - A minute before the deadline `IdleWarningDialog` (in `Layout`) asks "Are you still there?" with a countdown. "Stay signed in" (or Escape) calls `GET /api/me` to restart the timer; "Sign out" signs out at once.
+- Dates are shown and typed day first. Display goes through `src/lib/format.ts` (en-ZA, SAST). Date inputs use `components/DateField.tsx` (dd/mm/yyyy, via `isoToDmy`/`dmyToIso`), never a bare `<input type="date">`, which follows the browser's language (mm/dd/yyyy in US English). URLs and the API keep `yyyy-MM-dd`.
 - `VITE_API_BASE` is baked in at build time.
 - Form rules in `src/lib/disputeRules.ts` mirror `RaiseDisputeRequest` in `DTOs/DisputeDtos.cs`; change both together.
 - Tests mock the API with msw handlers in `src/test/server.ts`. Update the handlers when routes change.

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTransactions } from '../api/queries'
 import type { Transaction } from '../api/types'
+import { DateField } from '../components/DateField'
 import { EmptyState, ErrorBanner, Money, PageHeader, Pagination, Spinner, StatusBadge, Card } from '../components/ui'
 import { formatDate, formatMoney, todaySast } from '../lib/format'
 import { channelLabel } from '../lib/labels'
@@ -78,13 +79,13 @@ export function TransactionsPage() {
             <label htmlFor="from" className="label">
               From
             </label>
-            <input id="from" type="date" className="input" max={to || todaySast()} value={from} onChange={(e) => update({ from: e.target.value })} />
+            <DateField id="from" max={to || todaySast()} value={from} onChange={(iso) => update({ from: iso })} />
           </div>
           <div>
             <label htmlFor="to" className="label">
               To
             </label>
-            <input id="to" type="date" className="input" min={from || undefined} max={todaySast()} value={to} onChange={(e) => update({ to: e.target.value })} />
+            <DateField id="to" min={from || undefined} max={todaySast()} value={to} onChange={(iso) => update({ to: iso })} />
           </div>
           <button
             type="button"
