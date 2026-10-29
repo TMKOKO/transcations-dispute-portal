@@ -1,13 +1,11 @@
 using System.Text.RegularExpressions;
 using DisputePortal.Api.Auth;
-using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Helpers;
-using DisputePortal.Api.Models;
 using DisputePortal.Api.Services;
+using DisputePortal.Api.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace DisputePortal.Api.Controllers;
 
@@ -19,15 +17,11 @@ public partial class DisputesController : ControllerBase
     public const string IdempotencyHeader = "Idempotency-Key";
     public const string ReplayedHeader    = "Idempotent-Replayed";
 
-    private readonly AppDbContext _db;
-    private readonly IDisputeService _disputes;
-    private readonly ILogger<DisputesController> _logger;
+    private readonly DisputesViewModel _disputes;
 
-    public DisputesController(AppDbContext db, IDisputeService disputes, ILogger<DisputesController> logger)
+    public DisputesController(DisputesViewModel disputes)
     {
-        _db = db;
         _disputes = disputes;
-        _logger = logger;
     }
 
     /// <summary>Raise a dispute on one of the caller's transactions.</summary>
@@ -59,9 +53,7 @@ public partial class DisputesController : ControllerBase
         var result = await _disputes.RaiseAsync(customerId.Value, idempotencyKey, request, ct);
         if (!result.IsSuccess) return this.ToProblem(result.Error!);
 
-        var (dispute, replayed) = result.Value!;
-        var body = DisputeDetailResponse.From(dispute);
-
+        var (body, replayed) = result.Value!;
         if (replayed)
         {
             Response.Headers[ReplayedHeader] = "true";
@@ -80,24 +72,7 @@ public partial class DisputesController : ControllerBase
         var customerId = User.GetCustomerId();
         if (customerId is null) return Unauthorized();
 
-        var query = _db.Disputes.AsNoTracking().Where(d => d.CustomerId == customerId);
-        if (q.Status is { } status) query = query.Where(d => d.Status == status);
-
-        var total = await query.CountAsync(ct);
-        var items = await query
-            .Include(d => d.Transaction)
-            .OrderByDescending(d => d.CreatedAt)
-            .ThenBy(d => d.Id)
-            .Skip((q.Page - 1) * q.PageSize)
-            .Take(q.PageSize)
-            .ToListAsync(ct);
-
-        _logger.LogInformation(
-            "Disputes query: loaded {Count} of {Total} for customer {CustomerId} (status {Status}, page {Page}, size {PageSize})",
-            items.Count, total, customerId, q.Status, q.Page, q.PageSize);
-
-        return Ok(new PagedResponse<DisputeSummaryResponse>(
-            items.Select(DisputeSummaryResponse.From).ToList(), q.Page, q.PageSize, total));
+        return Ok(await _disputes.ListAsync(customerId.Value, q, ct));
     }
 
     /// <summary>One of the caller's disputes, with its status timeline, by the id in the request body.</summary>
@@ -114,23 +89,8 @@ public partial class DisputesController : ControllerBase
         var customerId = User.GetCustomerId();
         if (customerId is null) return Unauthorized();
 
-        var id = request.DisputeId!.Value;
-
-        // Scoped to customerId: another customer's dispute is a 404, never a 403.
-        var dispute = await _db.Disputes.AsNoTracking()
-            .Include(d => d.Transaction)
-            .Include(d => d.History)
-            .FirstOrDefaultAsync(d => d.Id == id && d.CustomerId == customerId, ct);
-
-        if (dispute is null)
-        {
-            _logger.LogInformation("Dispute lookup: {DisputeId} not found for customer {CustomerId}", id, customerId);
-            return this.ProblemWithCode("Dispute not found.", StatusCodes.Status404NotFound, "dispute_not_found");
-        }
-
-        _logger.LogInformation("Dispute lookup: loaded {DisputeNumber} ({DisputeId}), status {Status}, for customer {CustomerId}",
-            dispute.DisputeNumber, dispute.Id, dispute.Status, customerId);
-        return Ok(DisputeDetailResponse.From(dispute));
+        var result = await _disputes.GetAsync(customerId.Value, request.DisputeId!.Value, ct);
+        return result.IsSuccess ? Ok(result.Value) : this.ToProblem(result.Error!);
     }
 
     /// <summary>Withdraw an open dispute, named by the id in the body. Allowed while it is Submitted or UnderReview.</summary>
@@ -145,15 +105,13 @@ public partial class DisputesController : ControllerBase
         if (customerId is null) return Unauthorized();
 
         var result = await _disputes.WithdrawAsync(customerId.Value, request.DisputeId!.Value, request.Note, ct);
-        return result.IsSuccess
-            ? Ok(DisputeDetailResponse.From(result.Value!))
-            : this.ToProblem(result.Error!);
+        return result.IsSuccess ? Ok(result.Value) : this.ToProblem(result.Error!);
     }
 
     /// <summary>The reasons a customer can choose from, with display wording.</summary>
     [HttpGet("/api/dispute-reasons")]
     [ProducesResponseType(typeof(IReadOnlyList<DisputeReasonInfo>), StatusCodes.Status200OK)]
-    public IActionResult Reasons() => Ok(DisputeReasons.All);
+    public IActionResult Reasons() => Ok(_disputes.Reasons());
 
     [GeneratedRegex("^[A-Za-z0-9_-]{8,100}$")]
     private static partial Regex IdempotencyKeyFormat();

@@ -1,10 +1,9 @@
 using DisputePortal.Api.Auth;
-using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Helpers;
+using DisputePortal.Api.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace DisputePortal.Api.Controllers;
 
@@ -13,13 +12,11 @@ namespace DisputePortal.Api.Controllers;
 [Authorize(Roles = SessionClaims.CustomerRole)]
 public class MeController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    private readonly ILogger<MeController> _logger;
+    private readonly MeViewModel _me;
 
-    public MeController(AppDbContext db, ILogger<MeController> logger)
+    public MeController(MeViewModel me)
     {
-        _db = db;
-        _logger = logger;
+        _me = me;
     }
 
     /// <summary>The signed-in customer's profile.</summary>
@@ -30,19 +27,8 @@ public class MeController : ControllerBase
         var customerId = User.GetCustomerId();
         if (customerId is null) return Unauthorized();
 
-        var me = await _db.Customers.AsNoTracking()
-            .Where(c => c.Id == customerId)
-            .Select(c => new MeResponse(c.Id, c.FirstName, c.LastName, c.Email))
-            .FirstOrDefaultAsync(ct);
-
         // A live session for a customer that no longer exists: treat as signed out.
-        if (me is null)
-        {
-            _logger.LogWarning("Profile lookup: customer {CustomerId} from a live session no longer exists", customerId);
-            return Unauthorized();
-        }
-
-        _logger.LogInformation("Profile lookup: loaded customer {CustomerId}", customerId);
-        return Ok(me);
+        var me = await _me.GetAsync(customerId.Value, ct);
+        return me is null ? Unauthorized() : Ok(me);
     }
 }
