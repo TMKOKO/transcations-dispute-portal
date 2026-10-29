@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router'
 import { useAuth } from '../auth/AuthContext'
+import { IdleWarningDialog } from './IdleWarningDialog'
 
 /** Gate for every signed-in page. Remembers where the customer was going, for after login. */
 export function RequireAuth() {
@@ -56,6 +57,7 @@ function Layout() {
       <main id="main" ref={mainRef} tabIndex={-1} className="mx-auto max-w-5xl px-4 py-8 outline-none">
         <Outlet />
       </main>
+      <IdleWarningDialog />
     </div>
   )
 }
