@@ -4,6 +4,7 @@ using DisputePortal.Api.Auth;
 using DisputePortal.Api.Data;
 using DisputePortal.Api.Middleware;
 using DisputePortal.Api.Services;
+using DisputePortal.Api.ViewModels;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
@@ -79,6 +80,12 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<DisputeOptions>(builder.Configuration.GetSection(DisputeOptions.SectionName));
 builder.Services.AddSingleton<DisputeEligibility>();
 builder.Services.AddScoped<IDisputeService, DisputeService>();
+
+// One ViewModel per controller: queries, logging and response mapping, so controllers stay HTTP-only.
+builder.Services.AddScoped<AuthViewModel>();
+builder.Services.AddScoped<MeViewModel>();
+builder.Services.AddScoped<TransactionsViewModel>();
+builder.Services.AddScoped<DisputesViewModel>();
 
 // --- Authentication (server-side session cookie) ---
 builder.Services.AddAuthentication(SessionAuthenticationHandler.SchemeName)
