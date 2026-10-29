@@ -45,6 +45,17 @@ Single-item calls are POSTs with the id in a JSON body, so ids never appear in U
 
 A missing id is 400. Another customer's id is 404, the same as an id that does not exist.
 
+## Validation fails fast
+
+Bad input is a 400 before any database work. The **Validation (fail fast)** folder, and **Withdraw with a too-short note is 400** in Customer, check that:
+
+- each field in `errors` has exactly one message, for the first rule it broke, under the JSON name the client sent (`note`, not `Note`);
+- free text (description, withdraw note, search, login email) rejects control characters and invisible bidi overrides such as U+202E; the description and note allow line breaks;
+- a withdraw note is optional, but 5-500 characters when given;
+- a login email is at most 254 characters.
+
+Messages never repeat the rejected value.
+
 ## Notes
 
 - A run raises a real dispute in the local database and then withdraws it, which frees the transaction again, so the collection can be run repeatedly.
