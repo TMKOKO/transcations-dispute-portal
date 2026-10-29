@@ -11,51 +11,56 @@ namespace DisputePortal.Api.ViewModels;
 /// <summary>The caller's transactions, each flagged with whether it can be disputed, for <c>TransactionsController</c>.</summary>
 public sealed class TransactionsViewModel
 {
-    private readonly AppDbContext _db;
+    private readonly ReadStore _reads;
     private readonly DisputeEligibility _eligibility;
     private readonly ILogger<TransactionsViewModel> _logger;
 
-    public TransactionsViewModel(AppDbContext db, DisputeEligibility eligibility, ILogger<TransactionsViewModel> logger)
+    public TransactionsViewModel(ReadStore reads, DisputeEligibility eligibility, ILogger<TransactionsViewModel> logger)
     {
-        _db = db;
+        _reads = reads;
         _eligibility = eligibility;
         _logger = logger;
     }
 
     public async Task<PagedResponse<TransactionResponse>> ListAsync(Guid customerId, TransactionQuery q, CancellationToken ct)
     {
-        var query = _db.Transactions.AsNoTracking().Where(t => t.CustomerId == customerId);
-
-        if (q.From is { } from)
+        var (total, rows) = await _reads.QueryAsync(customerId, "transactions list", async db =>
         {
-            var fromUtc = Sast.StartOfDayUtc(from);
-            query = query.Where(t => t.TransactionDate >= fromUtc);
-        }
+            var query = db.Transactions.AsNoTracking().Where(t => t.CustomerId == customerId);
 
-        if (q.To is { } to)
-        {
-            // Inclusive of the whole "to" day in SAST.
-            var toUtc = Sast.StartOfDayUtc(to.AddDays(1));
-            query = query.Where(t => t.TransactionDate < toUtc);
-        }
+            if (q.From is { } from)
+            {
+                var fromUtc = Sast.StartOfDayUtc(from);
+                query = query.Where(t => t.TransactionDate >= fromUtc);
+            }
 
-        if (!string.IsNullOrWhiteSpace(q.Search))
-        {
-            // Escape LIKE wildcards so a search for "100%" means the literal text.
-            var pattern = "%" + EscapeLike(q.Search.Trim()) + "%";
-            query = query.Where(t => EF.Functions.ILike(t.MerchantName, pattern, "\\")
-                                  || EF.Functions.ILike(t.Reference, pattern, "\\"));
-        }
+            if (q.To is { } to)
+            {
+                // Inclusive of the whole "to" day in SAST.
+                var toUtc = Sast.StartOfDayUtc(to.AddDays(1));
+                query = query.Where(t => t.TransactionDate < toUtc);
+            }
 
-        var total = await query.CountAsync(ct);
+            if (!string.IsNullOrWhiteSpace(q.Search))
+            {
+                // Escape LIKE wildcards so a search for "100%" means the literal text.
+                var pattern = "%" + EscapeLike(q.Search.Trim()) + "%";
+                query = query.Where(t => EF.Functions.ILike(t.MerchantName, pattern, "\\")
+                                      || EF.Functions.ILike(t.Reference, pattern, "\\"));
+            }
 
-        var rows = await query
-            .OrderByDescending(t => t.TransactionDate)
-            .ThenBy(t => t.Id)
-            .Skip((q.Page - 1) * q.PageSize)
-            .Take(q.PageSize)
-            .Select(WithLatestDispute)
-            .ToListAsync(ct);
+            var total = await query.CountAsync(ct);
+
+            var rows = await query
+                .OrderByDescending(t => t.TransactionDate)
+                .ThenBy(t => t.Id)
+                .Skip((q.Page - 1) * q.PageSize)
+                .Take(q.PageSize)
+                .Select(WithLatestDispute)
+                .ToListAsync(ct);
+
+            return (total, rows);
+        });
 
         // HasSearch, not the search text: it is free input and may hold anything the customer typed.
         _logger.LogInformation(
@@ -70,10 +75,10 @@ public sealed class TransactionsViewModel
     {
         // Scoped to customerId, so another customer's transaction is indistinguishable from one
         // that does not exist. Returning 403 here instead would confirm the id was real.
-        var row = await _db.Transactions.AsNoTracking()
+        var row = await _reads.QueryAsync(customerId, "transaction lookup", db => db.Transactions.AsNoTracking()
             .Where(t => t.Id == transactionId && t.CustomerId == customerId)
             .Select(WithLatestDispute)
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefaultAsync(ct));
 
         if (row is null)
         {

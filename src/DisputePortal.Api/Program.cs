@@ -3,12 +3,14 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using DisputePortal.Api.Auth;
 using DisputePortal.Api.Data;
+using DisputePortal.Api.Events;
 using DisputePortal.Api.Middleware;
 using DisputePortal.Api.Services;
 using DisputePortal.Api.ViewModels;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -79,8 +81,30 @@ builder.Services.AddSwaggerGen(c =>
     c.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, "DisputePortal.Api.xml"));
 });
 
+// --- Database: primary for writes, optional replica for reads ---
+// Retries cover transient failures (a failover, a dropped connection) instead of turning them into
+// 500s. A retried SaveChanges whose first attempt had in fact committed hits a unique index and is
+// handled as a replay. Any explicit transaction must run inside CreateExecutionStrategy() (OutboxRelay).
+var primaryConnection = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(primaryConnection, npgsql => npgsql
+        .EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(2), errorCodesToAdd: null)
+        .CommandTimeout(10)));
+
+// The replica fails fast (one retry, 2 s to connect) because ReadStore falls back to the primary.
+// Unset, reads use the primary and ReadStore skips the replica logic altogether.
+var replicaConnection = builder.Configuration.GetConnectionString(ReadStore.ConnectionName);
+builder.Services.AddDbContext<ReadDbContext>(options =>
+    options.UseNpgsql(
+            string.IsNullOrWhiteSpace(replicaConnection)
+                ? primaryConnection
+                : new Npgsql.NpgsqlConnectionStringBuilder(replicaConnection) { Timeout = 2 }.ConnectionString,
+            npgsql => npgsql
+                .EnableRetryOnFailure(maxRetryCount: 1, maxRetryDelay: TimeSpan.FromMilliseconds(500), errorCodesToAdd: null)
+                .CommandTimeout(10))
+        .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking));
+builder.Services.AddSingleton<ReadYourWrites>();
+builder.Services.AddScoped<ReadStore>();
 
 // --- Sessions (Redis) ---
 // abortConnect=false: the API starts while Redis is still coming up and reconnects on its own.
@@ -92,9 +116,26 @@ builder.Services.Configure<CustomerSessionOptions>(builder.Configuration.GetSect
 builder.Services.AddSingleton<ISessionStore, RedisSessionStore>();
 builder.Services.AddExceptionHandler<SessionStoreUnavailableHandler>();
 
-builder.Services.AddHealthChecks()
+var healthChecks = builder.Services.AddHealthChecks()
     .AddDbContextCheck<AppDbContext>("database")
     .AddCheck<RedisHealthCheck>("redis");
+// Degraded, not Unhealthy: reads fall back to the primary without it.
+if (!string.IsNullOrWhiteSpace(replicaConnection))
+    healthChecks.AddDbContextCheck<ReadDbContext>("read-replica", failureStatus: HealthStatus.Degraded);
+
+// --- Dispute events (Kafka) ---
+// DisputeService always writes outbox rows. With Kafka on, OutboxPublisherService sends them and
+// DecisionConsumer applies the back office's decisions; off (tests, plain dotnet run), they wait.
+builder.Services.Configure<KafkaOptions>(builder.Configuration.GetSection(KafkaOptions.SectionName));
+builder.Services.AddScoped<DecisionHandler>();
+if (builder.Configuration.GetValue<bool>($"{KafkaOptions.SectionName}:{nameof(KafkaOptions.Enabled)}"))
+{
+    builder.Services.AddSingleton<IEventPublisher, KafkaEventPublisher>();
+    builder.Services.AddScoped<OutboxRelay>();
+    builder.Services.AddHostedService<OutboxPublisherService>();
+    builder.Services.AddHostedService<DecisionConsumer>();
+    healthChecks.AddCheck<OutboxHealthCheck>("outbox", failureStatus: HealthStatus.Degraded);
+}
 
 // The system clock, injected everywhere "now" matters (dispute window, timestamps, session cap)
 // so tests can pin it instead of racing the real one.
