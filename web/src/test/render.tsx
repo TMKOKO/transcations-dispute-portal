@@ -9,7 +9,7 @@ export function renderApp(route: InitialEntry, { signedIn = true } = {}) {
   if (signedIn) {
     sessionStorage.setItem(
       'dispute-portal.session',
-      JSON.stringify({ token: 'test-token', expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), displayName: 'Thandi' }),
+      JSON.stringify({ displayName: 'Thandi', idleTimeoutSeconds: 300, idleExpiresAt: Date.now() + 300_000 }),
     )
   }
 

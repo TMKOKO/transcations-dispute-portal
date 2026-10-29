@@ -16,6 +16,7 @@ public class LoginRequest
     public string Password { get; set; } = "";
 }
 
-public record LoginResponse(string Token, DateTime ExpiresAt, string DisplayName, string Role);
+/// <summary>No token: the session id travels only in the httpOnly cookie.</summary>
+public record LoginResponse(string DisplayName, string Role, int IdleTimeoutSeconds);
 
 public record MeResponse(Guid Id, string FirstName, string LastName, string Email);

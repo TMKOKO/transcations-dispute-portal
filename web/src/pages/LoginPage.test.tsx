@@ -8,7 +8,7 @@ describe('LoginPage', () => {
   it('signs in and lands on transactions', async () => {
     server.use(
       http.post(api('/api/auth/login'), () =>
-        HttpResponse.json({ token: 't', expiresAt: new Date(Date.now() + 60_000).toISOString(), displayName: 'Thandi', role: 'customer' }),
+        HttpResponse.json({ displayName: 'Thandi', role: 'customer', idleTimeoutSeconds: 300 }),
       ),
     )
     const { user } = renderApp('/login', { signedIn: false })

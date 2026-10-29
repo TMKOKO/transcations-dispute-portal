@@ -24,20 +24,42 @@ describe('messageFromProblem', () => {
 })
 
 describe('request', () => {
-  it('sends the bearer token and returns parsed JSON', async () => {
-    let auth: string | null = null
+  it('sends the session cookie, never an Authorization header, and returns parsed JSON', async () => {
+    let auth: string | null = 'unset'
     server.use(
       http.get(api('/api/me'), ({ request: req }) => {
         auth = req.headers.get('Authorization')
         return HttpResponse.json({ id: '1' })
       }),
     )
-    configureAuth(() => 'abc', () => {})
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
     const res = await request<{ id: string }>('/api/me')
 
-    expect(auth).toBe('Bearer abc')
+    expect(fetchSpy).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ credentials: 'include' }))
+    expect(auth).toBeNull()
     expect(res.data.id).toBe('1')
+    fetchSpy.mockRestore()
+  })
+
+  it('reports activity for answered requests, but not for 401s or the sign-in call', async () => {
+    const onActivity = vi.fn()
+    configureAuth(() => {}, onActivity)
+    server.use(
+      http.get(api('/api/me'), () => HttpResponse.json({ id: '1' })),
+      http.post(api('/api/disputes'), () => HttpResponse.json({ status: 422, code: 'transaction_pending' }, { status: 422 })),
+      http.get(api('/api/transactions'), () => new HttpResponse(null, { status: 401 })),
+      http.post(api('/api/auth/login'), () => HttpResponse.json({ displayName: 'T', role: 'customer', idleTimeoutSeconds: 300 })),
+    )
+
+    await request('/api/me')
+    // A business-rule failure still went through the session and restarted its timer.
+    await request('/api/disputes', { method: 'POST', body: {} }).catch(() => {})
+    expect(onActivity).toHaveBeenCalledTimes(2)
+
+    await request('/api/transactions').catch(() => {})
+    await request('/api/auth/login', { method: 'POST', body: {}, skipAuthRedirect: true })
+    expect(onActivity).toHaveBeenCalledTimes(2)
   })
 
   it('throws ApiError carrying status, code and field errors', async () => {
@@ -55,7 +77,7 @@ describe('request', () => {
 
   it('signs out on 401, except for login itself', async () => {
     const onUnauthorized = vi.fn()
-    configureAuth(() => 'expired', onUnauthorized)
+    configureAuth(onUnauthorized)
     server.use(
       http.get(api('/api/me'), () => new HttpResponse(null, { status: 401 })),
       http.post(api('/api/auth/login'), () => HttpResponse.json({ status: 401, detail: 'Email or password is incorrect.' }, { status: 401 })),

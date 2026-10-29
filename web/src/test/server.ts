@@ -98,6 +98,7 @@ export const handlers = [
   http.get(api('/api/dispute-reasons'), () => HttpResponse.json(reasons)),
   http.get(api('/api/disputes'), () => HttpResponse.json(paged([disputeDetail]))),
   http.post(api('/api/disputes/lookup'), () => HttpResponse.json(disputeDetail)),
+  http.post(api('/api/auth/logout'), () => new HttpResponse(null, { status: 204 })),
 ]
 
 export const server = setupServer(...handlers)

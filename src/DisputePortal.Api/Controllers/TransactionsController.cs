@@ -1,3 +1,4 @@
+using DisputePortal.Api.Auth;
 using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Helpers;
@@ -11,7 +12,7 @@ namespace DisputePortal.Api.Controllers;
 
 [ApiController]
 [Route("api/transactions")]
-[Authorize(Roles = JwtTokenService.CustomerRole)]
+[Authorize(Roles = SessionClaims.CustomerRole)]
 public class TransactionsController : ControllerBase
 {
     private readonly AppDbContext _db;

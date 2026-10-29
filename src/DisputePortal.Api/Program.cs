@@ -1,12 +1,12 @@
-using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using DisputePortal.Api.Auth;
 using DisputePortal.Api.Data;
 using DisputePortal.Api.Middleware;
 using DisputePortal.Api.Services;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -50,67 +50,39 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new() { Title = "Transactions Dispute Portal API", Version = "v1" });
+    // No security scheme: Swagger UI is same-origin, so after calling /api/auth/login the browser
+    // sends the session cookie on every "Try it out" by itself.
     c.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, "DisputePortal.Api.xml"));
-    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
-    {
-        Name         = "Authorization",
-        Type         = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
-        Scheme       = "bearer",
-        BearerFormat = "JWT",
-        In           = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Description  = "Paste the token returned by /api/auth/login."
-    });
-    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
-    {
-        {
-            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
-            {
-                Reference = new Microsoft.OpenApi.Models.OpenApiReference
-                {
-                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
-                    Id   = "Bearer"
-                }
-            },
-            Array.Empty<string>()
-        }
-    });
 });
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-builder.Services.AddHealthChecks().AddDbContextCheck<AppDbContext>("database");
+// --- Sessions (Redis) ---
+// abortConnect=false: the API starts while Redis is still coming up and reconnects on its own.
+// Until then session commands throw, which SessionStoreUnavailableHandler turns into a 503.
+var redisOptions = ConfigurationOptions.Parse(CustomerSessionOptions.RequireRedis(builder.Configuration));
+redisOptions.AbortOnConnectFail = false;
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
+builder.Services.Configure<CustomerSessionOptions>(builder.Configuration.GetSection(CustomerSessionOptions.SectionName));
+builder.Services.AddSingleton<ISessionStore, RedisSessionStore>();
+builder.Services.AddExceptionHandler<SessionStoreUnavailableHandler>();
 
-// The system clock, injected everywhere "now" matters (dispute window, timestamps, token expiry)
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>("database")
+    .AddCheck<RedisHealthCheck>("redis");
+
+// The system clock, injected everywhere "now" matters (dispute window, timestamps, session cap)
 // so tests can pin it instead of racing the real one.
 builder.Services.AddSingleton(TimeProvider.System);
 
 builder.Services.Configure<DisputeOptions>(builder.Configuration.GetSection(DisputeOptions.SectionName));
 builder.Services.AddSingleton<DisputeEligibility>();
 builder.Services.AddScoped<IDisputeService, DisputeService>();
-builder.Services.AddSingleton<ITokenService, JwtTokenService>();
 
-// --- Authentication (JWT bearer) ---
-var jwtKey = JwtSettings.RequireKey(builder.Configuration);
-
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.MapInboundClaims = false;
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer           = true,
-            ValidIssuer              = JwtSettings.Issuer(builder.Configuration),
-            ValidateAudience         = true,
-            ValidAudience            = JwtSettings.Audience(builder.Configuration),
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey         = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-            ValidateLifetime         = true,
-            ClockSkew                = TimeSpan.FromMinutes(1),
-            RoleClaimType            = "role",
-            NameClaimType            = "sub"
-        };
-    });
+// --- Authentication (server-side session cookie) ---
+builder.Services.AddAuthentication(SessionAuthenticationHandler.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, SessionAuthenticationHandler>(SessionAuthenticationHandler.SchemeName, null);
 builder.Services.AddAuthorization();
 
 // --- Rate limiting ---
@@ -177,10 +149,11 @@ static string ClientKey(HttpContext context, bool trustForwardedFor)
     return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 }
 
-// Credential-guessing surface: the login route. CORS preflights are excluded — an OPTIONS would
-// otherwise cost a permit and halve the budget for every browser caller.
+// Credential-guessing surface: the login route only, so signing out never eats the login budget.
+// CORS preflights are excluded — an OPTIONS would otherwise cost a permit and halve the budget for
+// every browser caller.
 static bool IsCredentialPath(HttpRequest request) =>
-    request.Path.StartsWithSegments("/api/auth", StringComparison.OrdinalIgnoreCase)
+    request.Path.StartsWithSegments("/api/auth/login", StringComparison.OrdinalIgnoreCase)
     && !HttpMethods.IsOptions(request.Method);
 
 // Returns RFC 7807 bodies from UseExceptionHandler below instead of a bare 500.
@@ -198,14 +171,17 @@ builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServe
 
 // The portal is a separate project served from its own origin, so its origin(s) must be listed.
 // Config-driven: localhost in compose/Development, the real portal domain in production.
+// AllowCredentials so the browser sends the session cookie. The cookie is SameSite=Strict, so the
+// portal and API must also be same-site (share a registrable domain), not just CORS-allowed.
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Portal", policy =>
         policy.WithOrigins(corsOrigins)
               .WithMethods("GET", "POST", "PATCH", "OPTIONS")
-              .WithHeaders("Content-Type", "Accept", "Authorization", "Idempotency-Key")
-              .WithExposedHeaders("Idempotent-Replayed"));
+              .WithHeaders("Content-Type", "Accept", "Idempotency-Key")
+              .WithExposedHeaders("Idempotent-Replayed")
+              .AllowCredentials());
 });
 
 var app = builder.Build();
@@ -236,6 +212,7 @@ app.UseStatusCodePages();
 
 app.UseCors("Portal");
 app.UseRateLimiter();
+app.UseMiddleware<OriginCheckMiddleware>();
 
 // Development only: it publishes every route and DTO schema.
 if (app.Environment.IsDevelopment())

@@ -14,7 +14,7 @@ public class LoggingTests : IAsyncLifetime
 
     private readonly ApiFactory _api;
 
-    public LoggingTests(PostgresFixture db) => _api = new ApiFactory(db);
+    public LoggingTests(ContainersFixture db) => _api = new ApiFactory(db);
 
     public Task InitializeAsync() => Task.CompletedTask;
     public Task DisposeAsync() => _api.DisposeAsync().AsTask();
@@ -64,6 +64,22 @@ public class LoggingTests : IAsyncLifetime
 
         Assert.Contains(Logs, r => r.Level == LogLevel.Information && r.Message.StartsWith("Login lookup: customer " + customer.Id));
         Assert.Contains(Logs, r => r.Level == LogLevel.Information && r.Message.StartsWith($"Customer {customer.Id} signed in"));
+    }
+
+    [Fact]
+    public async Task Session_ids_and_their_redis_keys_are_never_logged()
+    {
+        var customer = await _api.CreateCustomerAsync();
+        var client = _api.CreateClient();
+        var sessionId = ApiFactory.SessionIdFrom(await ApiFactory.LoginAsync(client, customer));
+        var hash = ApiFactory.RedisKeyFor(sessionId)["session:".Length..];
+
+        await client.GetAsync("/api/me");
+        await client.PostAsync("/api/auth/logout", null);
+        await _api.ClientWithSession(sessionId).GetAsync("/api/me");
+
+        Assert.Contains(Logs, r => r.Message.StartsWith($"Customer {customer.Id} signed out"));
+        Assert.DoesNotContain(Logs, r => r.Message.Contains(sessionId) || r.Message.Contains(hash, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

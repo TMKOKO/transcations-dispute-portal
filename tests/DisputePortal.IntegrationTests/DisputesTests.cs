@@ -13,7 +13,7 @@ public class DisputesTests : IAsyncLifetime
 {
     private readonly ApiFactory _api;
 
-    public DisputesTests(PostgresFixture db) => _api = new ApiFactory(db);
+    public DisputesTests(ContainersFixture db) => _api = new ApiFactory(db);
 
     public Task InitializeAsync() => Task.CompletedTask;
     public Task DisposeAsync() => _api.DisposeAsync().AsTask();

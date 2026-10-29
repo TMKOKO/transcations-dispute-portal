@@ -532,7 +532,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({service=\"api\"} |= \"signed in; token expires\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"api\"} |= \"signed in; session\" [$__auto]))",
           "legendFormat": "Signed in",
           "queryType": "range",
           "editorMode": "code"
