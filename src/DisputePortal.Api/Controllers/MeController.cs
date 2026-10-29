@@ -1,7 +1,7 @@
+using DisputePortal.Api.Auth;
 using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Helpers;
-using DisputePortal.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,7 +10,7 @@ namespace DisputePortal.Api.Controllers;
 
 [ApiController]
 [Route("api/me")]
-[Authorize(Roles = JwtTokenService.CustomerRole)]
+[Authorize(Roles = SessionClaims.CustomerRole)]
 public class MeController : ControllerBase
 {
     private readonly AppDbContext _db;
@@ -35,10 +35,10 @@ public class MeController : ControllerBase
             .Select(c => new MeResponse(c.Id, c.FirstName, c.LastName, c.Email))
             .FirstOrDefaultAsync(ct);
 
-        // A valid token for a customer that no longer exists: treat as signed out.
+        // A live session for a customer that no longer exists: treat as signed out.
         if (me is null)
         {
-            _logger.LogWarning("Profile lookup: customer {CustomerId} from a valid token no longer exists", customerId);
+            _logger.LogWarning("Profile lookup: customer {CustomerId} from a live session no longer exists", customerId);
             return Unauthorized();
         }
 

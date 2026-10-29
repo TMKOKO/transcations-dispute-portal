@@ -1,4 +1,4 @@
-// Thin fetch wrapper: base URL, bearer token, JSON, and one error shape for every failure.
+// Thin fetch wrapper: base URL, session cookie, JSON, and one error shape for every failure.
 
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? 'http://localhost:8080').replace(/\/$/, '')
 
@@ -40,16 +40,18 @@ export function messageFromProblem(body: ProblemBody | null, status: number): st
   return 'Something went wrong. Please try again.'
 }
 
-type TokenSource = () => string | null
-type UnauthorizedHandler = () => void
+type AuthHandler = () => void
 
-let getToken: TokenSource = () => null
-let onUnauthorized: UnauthorizedHandler = () => {}
+let onUnauthorized: AuthHandler = () => {}
+let onActivity: AuthHandler = () => {}
 
-/** Wired once by AuthProvider, so the client never imports React state. */
-export function configureAuth(tokenSource: TokenSource, unauthorized: UnauthorizedHandler) {
-  getToken = tokenSource
+/**
+ * Wired by AuthProvider, so the client never imports React state. `activity` runs after every
+ * request the API answered with the session, because each one restarted its idle timer.
+ */
+export function configureAuth(unauthorized: AuthHandler, activity: AuthHandler = () => {}) {
   onUnauthorized = unauthorized
+  onActivity = activity
 }
 
 export interface RequestOptions {
@@ -57,7 +59,10 @@ export interface RequestOptions {
   body?: unknown
   headers?: Record<string, string>
   signal?: AbortSignal
-  /** Login itself returns 401 for bad credentials; that must not trigger a sign-out. */
+  /**
+   * For the sign-in and sign-out calls themselves: login returns 401 for bad credentials, which
+   * must not trigger a sign-out, and neither call is activity in an existing session.
+   */
   skipAuthRedirect?: boolean
 }
 
@@ -69,8 +74,6 @@ export interface ApiResponse<T> {
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<ApiResponse<T>> {
   const headers: Record<string, string> = { Accept: 'application/json', ...options.headers }
-  const token = getToken()
-  if (token) headers.Authorization = `Bearer ${token}`
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
 
   let response: Response
@@ -78,6 +81,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     response = await fetch(`${API_BASE}${path}`, {
       method: options.method ?? 'GET',
       headers,
+      // The session is an httpOnly cookie on the API's origin; JavaScript never sees it.
+      credentials: 'include',
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: options.signal,
     })
@@ -88,6 +93,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   const text = await response.text()
   const body = text ? safeParse(text) : null
+
+  // 503 is the session store being down: the session was not touched, so nothing restarted.
+  if (!options.skipAuthRedirect && response.status !== 401 && response.status !== 503) onActivity()
 
   if (!response.ok) {
     if (response.status === 401 && !options.skipAuthRedirect) onUnauthorized()

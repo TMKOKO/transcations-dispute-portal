@@ -1,22 +1,25 @@
 {
   "info": {
     "name": "Dispute Portal API",
-    "description": "Every endpoint of the Dispute Portal API.\n\nRun top to bottom: the login requests save their tokens, 'List transactions' saves the first disputable transaction, and 'Raise dispute' saves the new dispute, so later requests work without copying ids by hand.\n\nSaved values go into the selected environment, or into collection variables when no environment is selected.\n\nDemo accounts (Development seed): every account uses the password Demo@12345!",
+    "description": "Every endpoint of the Dispute Portal API.\n\nRun top to bottom: the login requests save their session ids, 'List transactions' saves the first disputable transaction, and 'Raise dispute' saves the new dispute, so later requests work without copying ids by hand.\n\nSaved values go into the selected environment, or into collection variables when no environment is selected.\n\nDemo accounts (Development seed): every account uses the password Demo@12345!",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
-    "type": "bearer",
-    "bearer": [
-      { "key": "token", "value": "{{customerToken}}", "type": "string" }
+    "type": "apikey",
+    "apikey": [
+      { "key": "in", "value": "header", "type": "string" },
+      { "key": "key", "value": "Cookie", "type": "string" },
+      { "key": "value", "value": "dp_session={{customerSession}}", "type": "string" }
     ]
   },
+  "protocolProfileBehavior": { "disableCookies": true },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
     { "key": "customerEmail", "value": "thandi@example.com" },
     { "key": "otherCustomerEmail", "value": "sipho@example.com" },
     { "key": "password", "value": "Demo@12345!" },
-    { "key": "customerToken", "value": "" },
-    { "key": "otherCustomerToken", "value": "" },
+    { "key": "customerSession", "value": "" },
+    { "key": "otherCustomerSession", "value": "" },
     { "key": "transactionId", "value": "" },
     { "key": "transactionAmount", "value": "" },
     { "key": "disputeId", "value": "" },
@@ -39,7 +42,14 @@
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
                   "const body = pm.response.json();",
                   "pm.test('role is customer', () => pm.expect(body.role).to.eql('customer'));",
-                  "save('customerToken', body.token);"
+                  "pm.test('no token in the body', () => pm.expect(body).to.not.have.property('token'));",
+                  "const cookie = pm.response.headers.get('Set-Cookie') || '';",
+                  "const match = cookie.match(/dp_session=([^;]+)/);",
+                  "pm.test('sets an httpOnly session cookie', () => {",
+                  "  pm.expect(match).to.not.be.null;",
+                  "  pm.expect(cookie.toLowerCase()).to.include('httponly');",
+                  "});",
+                  "save('customerSession', match && match[1]);"
                 ]
               }
             }
@@ -52,7 +62,7 @@
               "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{password}}\"\n}"
             },
             "url": "{{baseUrl}}/api/auth/login",
-            "description": "Returns a 30-minute JWT (role=customer, customerId claim). Rate limited to 10 requests per minute per client."
+            "description": "Starts a server-side session and sets its id as the httpOnly dp_session cookie. The session ends after 5 minutes without a request, or 8 hours after sign-in. Rate limited to 10 requests per minute per client.\n\nThe collection turns Postman's cookie jar off and sends the saved id as an explicit Cookie header instead, so two customers can be signed in at once."
           }
         },
         {
@@ -65,7 +75,8 @@
                 "exec": [
                   "const save = (k, v) => pm.environment.name ? pm.environment.set(k, v) : pm.collectionVariables.set(k, v);",
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "save('otherCustomerToken', pm.response.json().token);"
+                  "const match = (pm.response.headers.get('Set-Cookie') || '').match(/dp_session=([^;]+)/);",
+                  "save('otherCustomerSession', match && match[1]);"
                 ]
               }
             }
@@ -337,7 +348,7 @@
           }
         },
         {
-          "name": "No token is 401",
+          "name": "No session is 401",
           "event": [
             {
               "listen": "test",
@@ -370,9 +381,11 @@
           ],
           "request": {
             "auth": {
-              "type": "bearer",
-              "bearer": [
-                { "key": "token", "value": "{{otherCustomerToken}}", "type": "string" }
+              "type": "apikey",
+              "apikey": [
+                { "key": "in", "value": "header", "type": "string" },
+                { "key": "key", "value": "Cookie", "type": "string" },
+                { "key": "value", "value": "dp_session={{otherCustomerSession}}", "type": "string" }
               ]
             },
             "method": "POST",
@@ -382,7 +395,7 @@
               "raw": "{\n  \"disputeId\": \"{{disputeId}}\"\n}"
             },
             "url": "{{baseUrl}}/api/disputes/lookup",
-            "description": "Sipho's token asking for Thandi's dispute. Queries are scoped to the token's customerId, so this looks exactly like a dispute that does not exist."
+            "description": "Sipho's session asking for Thandi's dispute. Queries are scoped to the session's customerId, so this looks exactly like a dispute that does not exist."
           }
         },
         {
@@ -403,9 +416,11 @@
           ],
           "request": {
             "auth": {
-              "type": "bearer",
-              "bearer": [
-                { "key": "token", "value": "{{otherCustomerToken}}", "type": "string" }
+              "type": "apikey",
+              "apikey": [
+                { "key": "in", "value": "header", "type": "string" },
+                { "key": "key", "value": "Cookie", "type": "string" },
+                { "key": "value", "value": "dp_session={{otherCustomerSession}}", "type": "string" }
               ]
             },
             "method": "POST",
@@ -415,7 +430,7 @@
               "raw": "{\n  \"transactionId\": \"{{transactionId}}\"\n}"
             },
             "url": "{{baseUrl}}/api/transactions/lookup",
-            "description": "Sipho's token asking for Thandi's transaction: indistinguishable from one that does not exist."
+            "description": "Sipho's session asking for Thandi's transaction: indistinguishable from one that does not exist."
           }
         },
         {
@@ -514,6 +529,52 @@
       ]
     },
     {
+      "name": "Sign out",
+      "item": [
+        {
+          "name": "Sign out",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/logout",
+            "description": "Deletes the session in Redis and expires the cookie. Always 204, even with no session."
+          }
+        },
+        {
+          "name": "Signed-out session is 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 unauthenticated', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.eql('unauthenticated');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/me",
+            "description": "The same session id as before sign-out: revoked on the server, so a copied cookie is useless."
+          }
+        }
+      ]
+    },
+    {
       "name": "Health",
       "auth": { "type": "noauth" },
       "item": [
@@ -522,7 +583,7 @@
           "request": {
             "method": "GET",
             "url": "{{baseUrl}}/health",
-            "description": "Healthy when the API can reach the database."
+            "description": "Healthy when the API can reach the database and Redis."
           }
         }
       ]

@@ -1,3 +1,4 @@
+using DisputePortal.Api.Auth;
 using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Helpers;
@@ -5,6 +6,7 @@ using DisputePortal.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace DisputePortal.Api.Controllers;
 
@@ -20,17 +22,19 @@ public class AuthController : ControllerBase
     private const string InvalidCredentials = "Email or password is incorrect.";
 
     private readonly AppDbContext _db;
-    private readonly ITokenService _tokens;
+    private readonly ISessionStore _sessions;
+    private readonly CustomerSessionOptions _session;
     private readonly ILogger<AuthController> _logger;
 
-    public AuthController(AppDbContext db, ITokenService tokens, ILogger<AuthController> logger)
+    public AuthController(AppDbContext db, ISessionStore sessions, IOptions<CustomerSessionOptions> session, ILogger<AuthController> logger)
     {
         _db = db;
-        _tokens = tokens;
+        _sessions = sessions;
+        _session = session.Value;
         _logger = logger;
     }
 
-    /// <summary>Customer login. Returns a short-lived bearer token.</summary>
+    /// <summary>Customer login. Starts a server-side session and sets its id as an httpOnly cookie.</summary>
     [HttpPost("login")]
     [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -55,9 +59,30 @@ public class AuthController : ControllerBase
             return this.ProblemWithCode(InvalidCredentials, StatusCodes.Status401Unauthorized, "invalid_credentials");
         }
 
-        var token = _tokens.CreateCustomerToken(customer!);
-        _logger.LogInformation("Customer {CustomerId} signed in; token expires {ExpiresAt:o}", customer!.Id, token.ExpiresAt);
-        return Ok(new LoginResponse(token.Token, token.ExpiresAt, customer!.FirstName, JwtTokenService.CustomerRole));
+        // Always a fresh id, and any session the browser already held ends: a planted cookie must
+        // never become a signed-in session (session fixation).
+        var previous = SessionCookie.Read(Request, _session);
+        if (previous is not null)
+            await _sessions.DeleteAsync(previous);
+
+        var issued = await _sessions.CreateAsync(customer!.Id);
+        SessionCookie.Append(Response, _session, issued.Id);
+        _logger.LogInformation("Customer {CustomerId} signed in; session idle timeout {IdleTimeout}", customer.Id, _session.IdleTimeout);
+        return Ok(new LoginResponse(customer.FirstName, SessionClaims.CustomerRole, (int)_session.IdleTimeout.TotalSeconds));
+    }
+
+    /// <summary>Ends the caller's session, if any, and clears the cookie. Always 204, so a retry is harmless.</summary>
+    [HttpPost("logout")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Logout()
+    {
+        var sessionId = SessionCookie.Read(Request, _session);
+        if (sessionId is not null)
+            await _sessions.DeleteAsync(sessionId);
+        SessionCookie.Expire(Response, _session);
+
+        _logger.LogInformation("Customer {CustomerId} signed out", User.GetCustomerId());
+        return NoContent();
     }
 
     private static string Normalise(string email) => email.Trim().ToLowerInvariant();

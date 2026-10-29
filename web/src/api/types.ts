@@ -30,11 +30,11 @@ export interface Paged<T> {
   totalPages: number
 }
 
+/** No token: the session is an httpOnly cookie. */
 export interface LoginResponse {
-  token: string
-  expiresAt: string
   displayName: string
   role: 'customer'
+  idleTimeoutSeconds: number
 }
 
 export interface Me {

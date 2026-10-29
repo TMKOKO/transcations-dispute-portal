@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DisputePortal.Api.Auth;
 using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Helpers;
@@ -12,7 +13,7 @@ namespace DisputePortal.Api.Controllers;
 
 [ApiController]
 [Route("api/disputes")]
-[Authorize(Roles = JwtTokenService.CustomerRole)]
+[Authorize(Roles = SessionClaims.CustomerRole)]
 public partial class DisputesController : ControllerBase
 {
     public const string IdempotencyHeader = "Idempotency-Key";

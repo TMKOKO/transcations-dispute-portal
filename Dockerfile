@@ -19,8 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 COPY --from=build /app/publish .
 
-# appsettings.Development.json carries a committed dev JWT signing key. Publish copies it, so it
-# would ship inside the image layer; drop it. Compose supplies dev values as environment variables.
+# appsettings.Development.json holds local-only settings (localhost connection strings, an http-only
+# cookie). Publish copies it into the image; drop it. Compose supplies dev values as environment variables.
 RUN rm -f /app/appsettings.Development.json
 
 # Non-root: the aspnet:8.0 image ships an unprivileged "app" user (APP_UID).

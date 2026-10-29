@@ -12,7 +12,7 @@ public class TransactionsTests : IAsyncLifetime
 {
     private readonly ApiFactory _api;
 
-    public TransactionsTests(PostgresFixture db) => _api = new ApiFactory(db);
+    public TransactionsTests(ContainersFixture db) => _api = new ApiFactory(db);
 
     public Task InitializeAsync() => Task.CompletedTask;
     public Task DisposeAsync() => _api.DisposeAsync().AsTask();

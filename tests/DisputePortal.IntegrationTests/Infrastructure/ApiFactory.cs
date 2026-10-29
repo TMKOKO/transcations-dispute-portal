@@ -1,40 +1,59 @@
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using DisputePortal.Api.Data;
-using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Models;
+using DisputePortal.Api.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Testing;
+using StackExchange.Redis;
 
 namespace DisputePortal.IntegrationTests.Infrastructure;
 
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public const string Password = "Test-password-123";
+    public const string SessionCookie = "dp_session";
 
     private readonly string _connectionString;
+    private readonly string _redisConnectionString;
     private readonly int _authPermitsPerMinute;
+    private readonly TimeProvider? _clock;
 
-    public ApiFactory(PostgresFixture db, int authPermitsPerMinute = 10_000)
+    /// <param name="redisConnectionString">Override to point the API at a Redis that is not there.</param>
+    public ApiFactory(ContainersFixture containers, int authPermitsPerMinute = 10_000, TimeProvider? clock = null,
+        string? redisConnectionString = null)
     {
-        _connectionString = db.ConnectionString;
+        _connectionString = containers.ConnectionString;
+        _redisConnectionString = redisConnectionString ?? containers.RedisConnectionString;
         _authPermitsPerMinute = authPermitsPerMinute;
+        _clock = clock;
+        Redis = containers.Redis;
+
+        // https, so the client's cookie container sends the Secure session cookie back.
+        ClientOptions.BaseAddress = new Uri("https://localhost");
     }
+
+    /// <summary>The test Redis, for asserting on session keys and TTLs.</summary>
+    public IDatabase Redis { get; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // "Testing", not Development: no demo seed, no Swagger — the production pipeline.
         builder.UseEnvironment("Testing");
 
-        // UseSetting rather than ConfigureAppConfiguration: Program.cs reads the JWT key and rate
-        // limits before Build(), and only host settings are visible that early.
+        // UseSetting rather than ConfigureAppConfiguration: Program.cs reads the Redis connection
+        // and rate limits before Build(), and only host settings are visible that early.
         builder.UseSetting("ConnectionStrings:DefaultConnection", _connectionString);
-        builder.UseSetting("Jwt:Key", "integration-tests-signing-key-at-least-32-bytes!");
+        builder.UseSetting("ConnectionStrings:Redis", _redisConnectionString);
         builder.UseSetting("RateLimiting:AuthPermitsPerMinute", _authPermitsPerMinute.ToString());
         builder.UseSetting("RateLimiting:GeneralPermitsPerMinute", "100000");
+        builder.UseSetting("Cors:AllowedOrigins:0", "https://portal.example.test");
+
+        if (_clock is not null)
+            builder.ConfigureTestServices(services => services.AddSingleton(_clock));
 
         // In-memory copy of every log record, so tests can assert what was (and was not) logged.
         builder.ConfigureLogging(logging => logging.AddFakeLogging());
@@ -92,13 +111,35 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         return tx;
     });
 
+    public static Task<HttpResponseMessage> LoginAsync(HttpClient client, Customer customer) =>
+        client.PostAsJsonAsync("/api/auth/login", new { email = customer.Email, password = Password });
+
+    /// <summary>A client signed in as this customer; its cookie container carries the session.</summary>
     public async Task<HttpClient> CustomerClientAsync(Customer customer)
     {
         var client = CreateClient();
-        var response = await client.PostAsJsonAsync("/api/auth/login", new { email = customer.Email, password = Password });
-        response.EnsureSuccessStatusCode();
-        var login = await response.Content.ReadFromJsonAsync<LoginResponse>(Json.Options);
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.Token);
+        (await LoginAsync(client, customer)).EnsureSuccessStatusCode();
+        return client;
+    }
+
+    /// <summary>The raw Set-Cookie header for the session cookie on a response.</summary>
+    public static string SessionSetCookie(HttpResponseMessage response) =>
+        response.Headers.GetValues("Set-Cookie").Single(h => h.StartsWith(SessionCookie + "=", StringComparison.Ordinal));
+
+    /// <summary>The session id a login response set.</summary>
+    public static string SessionIdFrom(HttpResponseMessage response)
+    {
+        var header = SessionSetCookie(response);
+        return header[(SessionCookie.Length + 1)..header.IndexOf(';')];
+    }
+
+    public static string RedisKeyFor(string sessionId) => RedisSessionStore.KeyFor(sessionId);
+
+    /// <summary>A client with no cookie container of its own, sending exactly this session id.</summary>
+    public HttpClient ClientWithSession(string sessionId)
+    {
+        var client = CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = ClientOptions.BaseAddress });
+        client.DefaultRequestHeaders.Add("Cookie", $"{SessionCookie}={sessionId}");
         return client;
     }
 }
