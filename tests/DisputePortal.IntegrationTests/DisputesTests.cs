@@ -177,6 +177,37 @@ public class DisputesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Each_field_reports_only_the_first_rule_it_broke()
+    {
+        var c = await _api.CreateCustomerAsync();
+        var tx = await _api.CreateTransactionAsync(c.Id);
+        var client = await _api.CustomerClientAsync(c);
+
+        // Too short and holding a NUL: two broken rules, one message.
+        var response = await RaiseAsync(client, new { transactionId = tx.Id, reason = "Other", description = "bad\u0000", disputedAmount = 10 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var description = (await response.ReadJsonAsync()).GetProperty("errors").GetProperty("description");
+        Assert.Equal(1, description.GetArrayLength());
+    }
+
+    [Fact]
+    public async Task A_withdraw_note_that_is_too_short_is_400_and_the_dispute_stays_open()
+    {
+        var c = await _api.CreateCustomerAsync();
+        var tx = await _api.CreateTransactionAsync(c.Id);
+        var client = await _api.CustomerClientAsync(c);
+        var dispute = await (await RaiseAsync(client, Body(tx.Id))).ReadAsync<DisputeDetailResponse>();
+
+        var response = await client.PostAsJsonAsync("/api/disputes/withdraw", new { disputeId = dispute.Id, note = "ok" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.True((await response.ReadJsonAsync()).GetProperty("errors").TryGetProperty("note", out _));
+        var after = await (await client.PostAsJsonAsync("/api/disputes/lookup", new { disputeId = dispute.Id })).ReadAsync<DisputeDetailResponse>();
+        Assert.Equal(DisputeStatus.Submitted, after.Status);
+    }
+
+    [Fact]
     public async Task Unknown_reason_is_400_without_leaking_type_names()
     {
         var c = await _api.CreateCustomerAsync();

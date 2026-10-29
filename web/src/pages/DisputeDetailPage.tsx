@@ -5,7 +5,8 @@ import { useDispute, useWithdrawDispute } from '../api/queries'
 import type { DisputeDetail } from '../api/types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { Timeline } from '../components/Timeline'
-import { Card, ErrorBanner, Spinner, StatusBadge } from '../components/ui'
+import { Card, ErrorBanner, FieldError, Spinner, StatusBadge } from '../components/ui'
+import { NOTE_MAX, withdrawNoteSchema } from '../lib/disputeRules'
 import { formatDate, formatDateTime, formatMoney } from '../lib/format'
 import { reasonLabel, statusExplainer } from '../lib/labels'
 import { paths, useStateId } from '../lib/routes'
@@ -48,10 +49,19 @@ function Detail({ dispute: d }: { dispute: DisputeDetail }) {
   const withdraw = useWithdrawDispute(d.id)
   const [confirming, setConfirming] = useState(false)
   const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState<string | null>(null)
 
   async function onWithdraw() {
+    // Checked before sending: a bad note keeps the dialog open rather than failing on the server.
+    const parsed = withdrawNoteSchema.safeParse(note)
+    if (!parsed.success) {
+      setNoteError(parsed.error.issues[0]?.message ?? null)
+      document.getElementById('withdraw-note')?.focus()
+      return
+    }
+    setNoteError(null)
     try {
-      await withdraw.mutateAsync(note.trim() || undefined)
+      await withdraw.mutateAsync(parsed.data || undefined)
       setConfirming(false)
       setNote('')
     } catch {
@@ -123,7 +133,10 @@ function Detail({ dispute: d }: { dispute: DisputeDetail }) {
         tone="danger"
         busy={withdraw.isPending}
         onConfirm={() => void onWithdraw()}
-        onCancel={() => setConfirming(false)}
+        onCancel={() => {
+          setConfirming(false)
+          setNoteError(null)
+        }}
       >
         <p>We'll stop working on {d.disputeNumber}. You can raise a new dispute on this transaction later if you need to.</p>
         <label htmlFor="withdraw-note" className="label mt-4">
@@ -132,12 +145,15 @@ function Detail({ dispute: d }: { dispute: DisputeDetail }) {
         <textarea
           id="withdraw-note"
           rows={3}
-          maxLength={500}
+          maxLength={NOTE_MAX}
           className="input"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="For example: the merchant refunded me directly."
+          aria-invalid={noteError ? true : undefined}
+          aria-describedby={noteError ? 'withdraw-note-error' : undefined}
         />
+        <FieldError id="withdraw-note-error" message={noteError ?? undefined} />
       </ConfirmDialog>
     </>
   )

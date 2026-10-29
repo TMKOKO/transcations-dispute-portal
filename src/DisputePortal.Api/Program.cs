@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using DisputePortal.Api.Auth;
@@ -6,6 +7,7 @@ using DisputePortal.Api.Middleware;
 using DisputePortal.Api.Services;
 using DisputePortal.Api.ViewModels;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
 
@@ -25,18 +27,39 @@ builder.Services.AddControllers(o =>
     .ConfigureApiBehaviorOptions(o =>
     {
         // Model-validation 400s are produced by MVC before any action runs, so they never reach
-        // ProblemResults' failure log. Log them here, then return the default response unchanged.
+        // ProblemResults' failure log. Log them here, after trimming to one error per field and keying every field by its JSON name.
         // Field names only: the rejected values may be personal information.
         var defaultResponse = o.InvalidModelStateResponseFactory;
         o.InvalidModelStateResponseFactory = context =>
         {
+            // Fail fast: each field reports only the first rule it broke ([Required] runs first),
+            // not every rule, so the customer fixes one thing at a time.
+            foreach (var entry in context.ModelState.Values)
+                while (entry.Errors.Count > 1) entry.Errors.RemoveAt(entry.Errors.Count - 1);
+
+            var response = defaultResponse(context);
+
+            // Attribute errors are keyed by JSON name, but IValidatableObject results arrive under the
+            // C# name ("Note"). Re-key those so the client sees the name it sent, "note".
+            if (response is ObjectResult { Value: ValidationProblemDetails problem })
+            {
+                foreach (var key in problem.Errors.Keys.Where(k => k.Length > 0 && char.IsUpper(k[0])).ToList())
+                {
+                    var messages = problem.Errors[key];
+                    problem.Errors.Remove(key);
+                    problem.Errors.TryAdd(JsonNamingPolicy.CamelCase.ConvertName(key), messages);
+                }
+            }
+
             var http = context.HttpContext;
-            var fields = context.ModelState.Where(e => e.Value?.Errors.Count > 0).Select(e => e.Key);
+            var fields = response is ObjectResult { Value: ValidationProblemDetails p }
+                ? p.Errors.Keys
+                : context.ModelState.Where(e => e.Value?.Errors.Count > 0).Select(e => e.Key);
             http.RequestServices.GetRequiredService<ILoggerFactory>()
                 .CreateLogger("DisputePortal.Api.Validation")
                 .LogWarning("Request {Method} {Path} failed validation on {Fields} (trace {TraceId})",
                     http.Request.Method, http.Request.Path.Value, string.Join(", ", fields), http.TraceIdentifier);
-            return defaultResponse(context);
+            return response;
         };
     });
 

@@ -87,6 +87,11 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - Log IDs, codes, counts, statuses and amounts only. Never log emails, passwords, session ids (or their Redis keys), dispute descriptions, withdraw notes or search text. `LoggingTests` asserts this using `FakeLogCollector` (`ApiFactory.Logs`).
 - Login failures log the internal reason, but the client always gets the same generic 401.
 
+**Validation.**
+- Request DTOs use DataAnnotations plus `IValidatableObject` for cross-field and trimmed-length rules.
+- Every free-text field carries `[PlainText]` (`Helpers/PlainTextAttribute.cs`), which rejects control characters and bidi overrides. Use `AllowLineBreaks = true` for multi-line text (description, withdraw note).
+- Validation fails fast. `InvalidModelStateResponseFactory` in `Program.cs` trims each field to the first rule it broke and re-keys `IValidatableObject` results from C# names (`Note`) to JSON names (`note`). So a 400's `errors` has exactly one message per field, under the name the client sent.
+
 **Tests.**
 - Unit tests cover eligibility, the state machine and request validation.
 - Integration tests use `ApiFactory` (`WebApplicationFactory<Program>`). It runs in the "Testing" environment: no seed, no Swagger, rate limits raised.
@@ -102,7 +107,10 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - A minute before the deadline `IdleWarningDialog` (in `Layout`) asks "Are you still there?" with a countdown. "Stay signed in" (or Escape) calls `GET /api/me` to restart the timer; "Sign out" signs out at once.
 - Dates are shown and typed day first. Display goes through `src/lib/format.ts` (en-ZA, SAST). Date inputs use `components/DateField.tsx` (dd/mm/yyyy, via `isoToDmy`/`dmyToIso`), never a bare `<input type="date">`, which follows the browser's language (mm/dd/yyyy in US English). URLs and the API keep `yyyy-MM-dd`.
 - `VITE_API_BASE` is baked in at build time.
-- Form rules in `src/lib/disputeRules.ts` mirror `RaiseDisputeRequest` in `DTOs/DisputeDtos.cs`; change both together.
+- Form rules mirror the API DTOs, so problems show before any request; change both sides together.
+  - `src/lib/disputeRules.ts` mirrors `RaiseDisputeRequest`, `WithdrawDisputeRequest` and `PlainTextAttribute` (`isPlainText`).
+  - `src/lib/loginRules.ts` mirrors `LoginRequest`.
+  - Forms show one message per field (`FieldError` in `components/ui.tsx`) and focus the first bad field.
 - Tests mock the API with msw handlers in `src/test/server.ts`. Update the handlers when routes change.
 
 ## Conventions

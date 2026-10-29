@@ -82,6 +82,70 @@ public class RequestValidationTests
     }
 
     [Theory]
+    [InlineData("I was charged twice\u0000 for one purchase.")]
+    [InlineData("I was charged twice ‮for one purchase.")]
+    [InlineData("I was charged twice \u001b[31mfor one purchase.")]
+    public void Description_rejects_control_and_bidi_characters(string description)
+    {
+        var r = Valid();
+        r.Description = description;
+        Assert.Contains(Validate(r), v => v.MemberNames.Contains(nameof(RaiseDisputeRequest.Description)));
+    }
+
+    [Fact]
+    public void Description_allows_line_breaks_and_tabs()
+    {
+        var r = Valid();
+        r.Description = "I was charged twice.\r\n\tOnce on the 3rd, again on the 4th.";
+        Assert.Empty(Validate(r));
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("   ", true)]
+    [InlineData("ok", false)]
+    [InlineData("  ok  ", false)]
+    [InlineData("Refunded", true)]
+    [InlineData("Paid back.\nThanks", true)]
+    [InlineData("Refunded\u0000", false)]
+    public void Withdraw_note_is_optional_but_must_say_something(string? note, bool valid)
+    {
+        var r = new WithdrawDisputeRequest { DisputeId = Guid.NewGuid(), Note = note };
+        Assert.Equal(valid, Validate(r).Count == 0);
+    }
+
+    [Fact]
+    public void Withdraw_note_has_a_maximum()
+    {
+        var r = new WithdrawDisputeRequest { DisputeId = Guid.NewGuid(), Note = new string('a', WithdrawDisputeRequest.NoteMaxLength + 1) };
+        Assert.NotEmpty(Validate(r));
+    }
+
+    [Fact]
+    public void Login_email_is_at_most_254_characters()
+    {
+        var ok = new LoginRequest { Email = new string('a', 242) + "@example.com", Password = "x" };
+        var tooLong = new LoginRequest { Email = new string('a', 243) + "@example.com", Password = "x" };
+        Assert.Empty(Validate(ok));
+        Assert.Contains(Validate(tooLong), v => v.MemberNames.Contains(nameof(LoginRequest.Email)));
+    }
+
+    [Fact]
+    public void Login_rejects_control_characters_in_the_email_and_a_blank_password()
+    {
+        Assert.NotEmpty(Validate(new LoginRequest { Email = "thandi@example.com\u0000", Password = "x" }));
+        Assert.NotEmpty(Validate(new LoginRequest { Email = "thandi@example.com", Password = "   " }));
+    }
+
+    [Fact]
+    public void Transaction_search_rejects_control_characters()
+    {
+        Assert.NotEmpty(Validate(new TransactionQuery { Search = "comp\tuticket" }));
+        Assert.Empty(Validate(new TransactionQuery { Search = "computicket" }));
+    }
+
+    [Theory]
     [InlineData(2026, 1042, "DSP-2026-001042")]
     [InlineData(2027, 1, "DSP-2027-000001")]
     [InlineData(2026, 1234567, "DSP-2026-1234567")]

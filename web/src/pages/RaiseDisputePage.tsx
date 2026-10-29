@@ -3,7 +3,7 @@ import { Link, Navigate } from 'react-router'
 import { ApiError } from '../api/client'
 import { useDisputeReasons, useRaiseDispute, useTransaction } from '../api/queries'
 import type { DisputeDetail, DisputeReason, Transaction } from '../api/types'
-import { Card, ErrorBanner, PageHeader, Spinner } from '../components/ui'
+import { Card, ErrorBanner, FieldError, PageHeader, Spinner } from '../components/ui'
 import {
   DESCRIPTION_MAX,
   disputeFormSchema,
@@ -280,15 +280,6 @@ function TransactionSummary({ tx }: { tx: Transaction }) {
         <dd className="truncate font-mono text-xs text-slate-700">{tx.reference}</dd>
       </div>
     </dl>
-  )
-}
-
-function FieldError({ id, message }: { id: string; message?: string }) {
-  if (!message) return null
-  return (
-    <p id={id} className="mt-1.5 text-sm text-rose-700">
-      {message}
-    </p>
   )
 }
 

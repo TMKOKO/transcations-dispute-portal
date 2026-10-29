@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from 'react'
+import { FieldError } from '../components/ui'
+import { loginSchema, type LoginErrors, type LoginValues } from '../lib/loginRules'
 import { Navigate, useLocation, useNavigate } from 'react-router'
 import { ApiError } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
@@ -17,6 +19,7 @@ export function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<LoginErrors>({})
   const [busy, setBusy] = useState(false)
 
   if (isAuthenticated) return <Navigate to={from} replace state={fromState} />
@@ -24,13 +27,19 @@ export function LoginPage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    if (!email.trim() || !password) {
-      setError('Enter your email address and password.')
+    // Checked here first, so a typo never costs a round trip (or a login attempt).
+    const parsed = loginSchema.safeParse({ email, password })
+    if (!parsed.success) {
+      const next: LoginErrors = {}
+      for (const issue of parsed.error.issues) next[issue.path[0] as keyof LoginValues] ??= issue.message
+      setFieldErrors(next)
+      document.getElementById(next.email ? 'email' : 'password')?.focus()
       return
     }
+    setFieldErrors({})
     setBusy(true)
     try {
-      await login(email.trim(), password)
+      await login(parsed.data.email, parsed.data.password)
       navigate(from, { replace: true, state: fromState })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
@@ -74,7 +83,10 @@ export function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                aria-invalid={fieldErrors.email ? true : undefined}
+                aria-describedby={fieldErrors.email ? 'email-error' : undefined}
               />
+              <FieldError id="email-error" message={fieldErrors.email} />
             </div>
             <div>
               <label htmlFor="password" className="label">
@@ -88,7 +100,10 @@ export function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                aria-invalid={fieldErrors.password ? true : undefined}
+                aria-describedby={fieldErrors.password ? 'password-error' : undefined}
               />
+              <FieldError id="password-error" message={fieldErrors.password} />
             </div>
             <button type="submit" className="btn-primary w-full" disabled={busy}>
               {busy ? 'Signing in…' : 'Sign in'}

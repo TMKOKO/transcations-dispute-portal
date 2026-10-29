@@ -71,6 +71,7 @@ export function TransactionsPage() {
               type="search"
               className="input"
               placeholder="Merchant or reference"
+              maxLength={100}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />
