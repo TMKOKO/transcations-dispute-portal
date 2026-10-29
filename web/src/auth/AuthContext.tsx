@@ -25,7 +25,14 @@ interface AuthState {
   signedOutReason: string | null
   login: (email: string, password: string) => Promise<void>
   logout: (reason?: string) => void
+  /** Epoch ms when an idle session will end, set once the "still there?" warning is due. */
+  idleWarningUntil: number | null
+  /** One API call, which restarts the idle timer on the server and here. */
+  stayActive: () => Promise<void>
 }
+
+/** How long before the idle sign-out the customer is warned (half the timeout if that is shorter). */
+const WARNING_LEAD_MS = 60_000
 
 const AuthContext = createContext<AuthState | null>(null)
 
@@ -61,11 +68,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return stored && { displayName: stored.displayName, idleTimeoutSeconds: stored.idleTimeoutSeconds }
   })
   const [signedOutReason, setSignedOutReason] = useState<string | null>(null)
+  const [idleWarningUntil, setIdleWarningUntil] = useState<number | null>(null)
   const idleTimer = useRef<number | undefined>(undefined)
+  const warningTimer = useRef<number | undefined>(undefined)
+  const idleDeadline = useRef(0)
 
   const logout = useCallback(
     (reason?: string) => {
       window.clearTimeout(idleTimer.current)
+      window.clearTimeout(warningTimer.current)
+      setIdleWarningUntil(null)
       // Best effort: revokes the session in Redis and clears the cookie. If the API is unreachable
       // the session still ends on its own at the idle timeout.
       request('/api/auth/logout', { method: 'POST', skipAuthRedirect: true }).catch(() => {})
@@ -83,8 +95,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const scheduleIdleLogout = useCallback(
     (current: Session, idleExpiresAt: number) => {
       storeSession({ ...current, idleExpiresAt })
+      idleDeadline.current = idleExpiresAt
       window.clearTimeout(idleTimer.current)
+      window.clearTimeout(warningTimer.current)
+      setIdleWarningUntil(null)
       idleTimer.current = window.setTimeout(() => logout(idleMessage(current)), Math.max(idleExpiresAt - Date.now(), 0))
+      const lead = Math.min(WARNING_LEAD_MS, (current.idleTimeoutSeconds * 1000) / 2)
+      warningTimer.current = window.setTimeout(
+        () => setIdleWarningUntil(idleExpiresAt),
+        Math.max(idleExpiresAt - lead - Date.now(), 0),
+      )
     },
     [logout],
   )
@@ -102,8 +122,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = readStoredSession()
     if (stored) scheduleIdleLogout(stored, stored.idleExpiresAt)
-    return () => window.clearTimeout(idleTimer.current)
+    return () => {
+      window.clearTimeout(idleTimer.current)
+      window.clearTimeout(warningTimer.current)
+    }
   }, [scheduleIdleLogout])
+
+  // Browsers throttle timers in background tabs, so the idle timer can fire minutes late. Check
+  // the deadline the moment the customer comes back, before the page shows anything else.
+  useEffect(() => {
+    if (!session) return
+    const checkIdle = () => {
+      if (document.visibilityState === 'visible' && Date.now() >= idleDeadline.current) logout(idleMessage(session))
+    }
+    document.addEventListener('visibilitychange', checkIdle)
+    window.addEventListener('focus', checkIdle)
+    window.addEventListener('pageshow', checkIdle)
+    return () => {
+      document.removeEventListener('visibilitychange', checkIdle)
+      window.removeEventListener('focus', checkIdle)
+      window.removeEventListener('pageshow', checkIdle)
+    }
+  }, [session, logout])
+
+  // Any authenticated call restarts the timer; /api/me is the cheapest. A 401 here signs out as usual.
+  const stayActive = useCallback(async () => {
+    await request('/api/me')
+  }, [])
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -121,8 +166,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<AuthState>(
-    () => ({ session, isAuthenticated: session !== null, signedOutReason, login, logout }),
-    [session, signedOutReason, login, logout],
+    () => ({
+      session,
+      isAuthenticated: session !== null,
+      signedOutReason,
+      login,
+      logout,
+      idleWarningUntil,
+      stayActive,
+    }),
+    [session, signedOutReason, login, logout, idleWarningUntil, stayActive],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

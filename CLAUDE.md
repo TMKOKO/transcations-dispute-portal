@@ -97,6 +97,8 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - `src/api/client.ts` is the fetch wrapper that turns ProblemDetails into `ApiError`.
 - `fetch` uses `credentials: 'include'`; the portal never sees the session id. `sessionStorage` (`src/auth/AuthContext.tsx`) holds only the display name and the idle deadline.
 - Every API response (except 401/503 and the login/logout calls) pushes the deadline back, mirroring the server's idle timer. The portal signs out at that deadline or on any 401. Sign out calls `POST /api/auth/logout`.
+- Only the customer may cause API calls: refetch on window focus or reconnect is off (`src/api/queryClient.ts`), because any request keeps the session alive. The deadline is also checked when the tab becomes visible or focused, because background-tab timers fire late.
+- A minute before the deadline `IdleWarningDialog` (in `Layout`) asks "Are you still there?" with a countdown. "Stay signed in" (or Escape) calls `GET /api/me` to restart the timer; "Sign out" signs out at once.
 - `VITE_API_BASE` is baked in at build time.
 - Form rules in `src/lib/disputeRules.ts` mirror `RaiseDisputeRequest` in `DTOs/DisputeDtos.cs`; change both together.
 - Tests mock the API with msw handlers in `src/test/server.ts`. Update the handlers when routes change.

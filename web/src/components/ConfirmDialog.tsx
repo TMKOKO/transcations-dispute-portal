@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
 
 /**
  * Built on the native <dialog>, which supplies the focus trap, Escape-to-close and inert
@@ -14,6 +14,7 @@ export function ConfirmDialog({
   tone = 'default',
   onConfirm,
   onCancel,
+  onEscape = onCancel,
 }: {
   open: boolean
   title: string
@@ -24,8 +25,11 @@ export function ConfirmDialog({
   tone?: 'default' | 'danger'
   onConfirm: () => void
   onCancel: () => void
+  /** Escape key; defaults to onCancel. */
+  onEscape?: () => void
 }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
 
   useEffect(() => {
     const dialog = ref.current
@@ -44,15 +48,15 @@ export function ConfirmDialog({
   return (
     <dialog
       ref={ref}
-      aria-labelledby="confirm-title"
+      aria-labelledby={titleId}
       onCancel={(e) => {
         e.preventDefault()
-        if (!busy) onCancel()
+        if (!busy) onEscape()
       }}
       className="m-auto w-[min(28rem,calc(100%-2rem))] rounded-xl p-0 shadow-xl backdrop:bg-slate-900/40"
     >
       <div className="p-6">
-        <h2 id="confirm-title" className="text-lg font-semibold text-slate-900">
+        <h2 id={titleId} className="text-lg font-semibold text-slate-900">
           {title}
         </h2>
         <div className="mt-2 text-sm text-slate-600">{children}</div>
