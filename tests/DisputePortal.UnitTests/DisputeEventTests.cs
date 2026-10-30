@@ -15,6 +15,36 @@ public class DisputeEventTests
     private static Dispute Raised() => Dispute.Raise("DSP-2026-001000", Guid.NewGuid(), Guid.NewGuid(),
         DisputeReason.Unauthorised, "Someone else used my card at this shop.", 250m, "key-1", Now);
 
+    [Theory]
+    [InlineData(DisputeDecision.UnderReview, DisputeStatus.UnderReview)]
+    [InlineData(DisputeDecision.RefundIssued, DisputeStatus.Resolved)]
+    [InlineData(DisputeDecision.Rejected, DisputeStatus.Rejected)]
+    public void An_agents_decision_goes_to_the_topic_the_consumer_reads_it_from(DisputeDecision decision, DisputeStatus status)
+    {
+        var (topic, eventType) = DisputeTopics.ForDecision(decision);
+
+        var read = DisputeTopics.DecisionFor(topic);
+
+        Assert.NotNull(read);
+        Assert.Equal(eventType, read.Value.EventType);
+        Assert.Equal(status, read.Value.Status);
+    }
+
+    [Fact]
+    public void An_agents_decision_carries_the_note_but_never_the_description()
+    {
+        var dispute = Raised();
+
+        var json = DisputeEvent.Decision(dispute, DisputeEventTypes.UnderReview, "Looking into it.", Now).ToJson();
+        var root = JsonDocument.Parse(json).RootElement;
+
+        Assert.Equal("UnderReview", root.GetProperty("eventType").GetString());
+        Assert.Equal(dispute.Id, root.GetProperty("disputeId").GetGuid());
+        Assert.Equal("Looking into it.", root.GetProperty("note").GetString());
+        Assert.False(root.TryGetProperty("description", out _));
+        Assert.DoesNotContain(dispute.Description, json);
+    }
+
     [Fact]
     public void DisputeSubmitted_carries_ids_reason_and_amount_but_never_the_description()
     {

@@ -63,6 +63,19 @@ public sealed record DisputeEvent
         TransactionId = dispute.TransactionId,
     };
 
+    // The note is written by the agent for the customer, so unlike the customer's own text it may travel.
+    public static DisputeEvent Decision(Dispute dispute, string eventType, string? note, DateTime nowUtc) => new()
+    {
+        EventId       = Guid.NewGuid(),
+        EventType     = eventType,
+        OccurredAt    = new DateTimeOffset(nowUtc, TimeSpan.Zero),
+        DisputeId     = dispute.Id,
+        DisputeNumber = dispute.DisputeNumber,
+        CustomerId    = dispute.CustomerId,
+        TransactionId = dispute.TransactionId,
+        Note          = note,
+    };
+
     public string ToJson() => JsonSerializer.Serialize(this, Json);
 
     /// <exception cref="JsonException">Not a JSON object of this shape.</exception>

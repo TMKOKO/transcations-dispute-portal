@@ -17,17 +17,20 @@ public sealed class SessionAuthenticationHandler : AuthenticationHandler<Authent
 
     private readonly ISessionStore _sessions;
     private readonly CustomerSessionOptions _session;
+    private readonly AgentOptions _agents;
 
     public SessionAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
         ISessionStore sessions,
-        IOptions<CustomerSessionOptions> session)
+        IOptions<CustomerSessionOptions> session,
+        IOptions<AgentOptions> agents)
         : base(options, logger, encoder)
     {
         _sessions = sessions;
         _session  = session.Value;
+        _agents   = agents.Value;
     }
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
@@ -43,9 +46,27 @@ public sealed class SessionAuthenticationHandler : AuthenticationHandler<Authent
         }
 
         // Debug, not Information: this runs on every authenticated request.
-        Logger.LogDebug("Session lookup: live session for customer {CustomerId}", session.CustomerId);
-        var principal = SessionClaims.ForCustomer(session.CustomerId, Scheme.Name);
-        return AuthenticateResult.Success(new AuthenticationTicket(principal, Scheme.Name));
+        if (session.AgentId is { } agentId)
+        {
+            // Turning the demo login off also ends the agent sessions still in Redis.
+            if (!_agents.Enabled)
+            {
+                Logger.LogInformation("Session lookup: agent {AgentId} refused, the agent login is off", agentId);
+                return AuthenticateResult.Fail("Agent login is off.");
+            }
+
+            Logger.LogDebug("Session lookup: live session for agent {AgentId}", agentId);
+            return AuthenticateResult.Success(new AuthenticationTicket(SessionClaims.ForAgent(agentId, Scheme.Name), Scheme.Name));
+        }
+
+        if (session.CustomerId is not { } customerId)
+        {
+            Logger.LogWarning("Session lookup: session has neither a customer nor an agent");
+            return AuthenticateResult.Fail("Session ended or unknown.");
+        }
+
+        Logger.LogDebug("Session lookup: live session for customer {CustomerId}", customerId);
+        return AuthenticateResult.Success(new AuthenticationTicket(SessionClaims.ForCustomer(customerId, Scheme.Name), Scheme.Name));
     }
 
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
@@ -57,4 +78,9 @@ public sealed class SessionAuthenticationHandler : AuthenticationHandler<Authent
         return ProblemResponses.WriteAsync(Context, Logger, StatusCodes.Status401Unauthorized,
             "unauthenticated", "Your session has ended. Please sign in again.");
     }
+
+    // A live session in the wrong role: an agent on a customer endpoint, or the other way round.
+    protected override Task HandleForbiddenAsync(AuthenticationProperties properties) =>
+        ProblemResponses.WriteAsync(Context, Logger, StatusCodes.Status403Forbidden,
+            "forbidden", "You do not have access to this.");
 }

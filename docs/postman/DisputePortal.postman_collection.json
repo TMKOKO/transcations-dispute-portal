@@ -17,9 +17,11 @@
     { "key": "baseUrl", "value": "http://localhost:8080" },
     { "key": "customerEmail", "value": "thandi@example.com" },
     { "key": "otherCustomerEmail", "value": "sipho@example.com" },
+    { "key": "agentEmail", "value": "agent@example.com" },
     { "key": "password", "value": "Demo@12345!" },
     { "key": "customerSession", "value": "" },
     { "key": "otherCustomerSession", "value": "" },
+    { "key": "agentSession", "value": "" },
     { "key": "transactionId", "value": "" },
     { "key": "transactionAmount", "value": "" },
     { "key": "disputeId", "value": "" },
@@ -686,6 +688,295 @@
             "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{longEmail}}\",\n  \"password\": \"{{password}}\"\n}" },
             "url": "{{baseUrl}}/api/auth/login",
             "description": "254 is the longest address SMTP allows (RFC 5321)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Demo agent",
+      "item": [
+        {
+          "name": "Agent login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const save = (k, v) => pm.environment.name ? pm.environment.set(k, v) : pm.collectionVariables.set(k, v);",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('role is agent', () => pm.expect(pm.response.json().role).to.eql('agent'));",
+                  "const match = (pm.response.headers.get('Set-Cookie') || '').match(/dp_session=([^;]+)/);",
+                  "pm.test('sets a session cookie', () => pm.expect(match).to.not.be.null);",
+                  "save('agentSession', match && match[1]);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{agentEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "The same login as customers. Only works where Agent:Enabled is on (local compose). The seeded account shares the demo password. No auth: login ends any session it is sent, which here would be the customer's."
+          }
+        },
+        {
+          "name": "Keep the session alive",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                },
+                {
+                  "key": "key",
+                  "value": "Cookie",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "dp_session={{agentSession}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/agent/session",
+            "description": "Does nothing but restart the idle timer. The portal calls it for \"Stay signed in\"."
+          }
+        },
+        {
+          "name": "List all disputes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().items;",
+                  "pm.test('finds disputes', () => pm.expect(items.length).to.be.above(0));",
+                  "pm.test('no private text', () => { pm.expect(items[0]).to.not.have.property('description'); pm.expect(items[0]).to.not.have.property('email'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                },
+                {
+                  "key": "key",
+                  "value": "Cookie",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "dp_session={{agentSession}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/agent/disputes?pageSize=20",
+            "description": "Every customer's disputes, newest first. Filter with status, page and pageSize."
+          }
+        },
+        {
+          "name": "Send a decision",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test('says which topic', () => pm.expect(body.topic).to.eql('dispute-under-review'));",
+                  "pm.test('has an event id', () => pm.expect(body.eventId).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                },
+                {
+                  "key": "key",
+                  "value": "Cookie",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "dp_session={{agentSession}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disputeId\": \"{{disputeId}}\",\n  \"decision\": \"UnderReview\",\n  \"note\": \"A disputes specialist is looking into this.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/agent/disputes/decision",
+            "description": "Queues the decision for its Kafka topic. Nothing has changed yet: the consumer applies it, skips it as stale or sends it to dispute-decisions-dlq. decision is UnderReview, RefundIssued or Rejected."
+          }
+        },
+        {
+          "name": "A decision on an unknown dispute is 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('code', () => pm.expect(pm.response.json().code).to.eql('dispute_not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                },
+                {
+                  "key": "key",
+                  "value": "Cookie",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "dp_session={{agentSession}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disputeId\": \"00000000-0000-0000-0000-000000000001\",\n  \"decision\": \"UnderReview\"\n}"
+            },
+            "url": "{{baseUrl}}/api/agent/disputes/decision",
+            "description": "Nothing is queued."
+          }
+        },
+        {
+          "name": "An agent on a customer endpoint is 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "pm.test('code', () => pm.expect(pm.response.json().code).to.eql('forbidden'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                },
+                {
+                  "key": "key",
+                  "value": "Cookie",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "dp_session={{agentSession}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/me",
+            "description": "An agent's session has no customer id."
+          }
+        },
+        {
+          "name": "A customer on an agent endpoint is 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "pm.test('code', () => pm.expect(pm.response.json().code).to.eql('forbidden'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/agent/disputes",
+            "description": "Sent with the customer session."
           }
         }
       ]

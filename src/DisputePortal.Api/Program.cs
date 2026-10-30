@@ -151,6 +151,11 @@ builder.Services.AddScoped<MeViewModel>();
 builder.Services.AddScoped<TransactionsViewModel>();
 builder.Services.AddScoped<DisputesViewModel>();
 
+// The demo agent (off unless Agent:Enabled): sends decisions to Kafka, never changes a dispute itself.
+builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentOptions.SectionName));
+builder.Services.AddScoped<AgentDecisionService>();
+builder.Services.AddScoped<AgentViewModel>();
+
 // --- Authentication (server-side session cookie) ---
 builder.Services.AddAuthentication(SessionAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, SessionAuthenticationHandler>(SessionAuthenticationHandler.SchemeName, null);
@@ -270,7 +275,13 @@ using (var scope = app.Services.CreateScope())
     // Every seeded account shares one published demo password, so seeding must never run against
     // a real environment — even one whose tables happen to be empty.
     if (app.Environment.IsDevelopment())
-        await DbSeeder.SeedAsync(db, scope.ServiceProvider.GetRequiredService<TimeProvider>(), app.Logger);
+    {
+        var clock = scope.ServiceProvider.GetRequiredService<TimeProvider>();
+        await DbSeeder.SeedAsync(db, clock, app.Logger);
+
+        if (app.Configuration.GetValue<bool>($"{AgentOptions.SectionName}:{nameof(AgentOptions.Enabled)}"))
+            await DbSeeder.SeedAgentAsync(db, clock, app.Logger);
+    }
 }
 
 // Outermost, so the headers land on error responses too. LIFO

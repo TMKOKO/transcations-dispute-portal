@@ -22,7 +22,7 @@ public class AuthController : ControllerBase
         _session = session.Value;
     }
 
-    /// <summary>Customer login. Starts a server-side session and sets its id as an httpOnly cookie.</summary>
+    /// <summary>Customer or demo agent login. Starts a server-side session and sets its id as an httpOnly cookie.</summary>
     [HttpPost("login")]
     [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -41,7 +41,7 @@ public class AuthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Logout()
     {
-        await _auth.LogoutAsync(SessionCookie.Read(Request, _session), User.GetCustomerId());
+        await _auth.LogoutAsync(SessionCookie.Read(Request, _session), User.GetCustomerId(), User.GetAgentId());
         SessionCookie.Expire(Response, _session);
         return NoContent();
     }

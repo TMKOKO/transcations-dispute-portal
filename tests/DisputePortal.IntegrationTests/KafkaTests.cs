@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
@@ -22,7 +23,7 @@ public class KafkaTests : IClassFixture<KafkaFixture>, IAsyncLifetime
     public KafkaTests(ContainersFixture db, KafkaFixture kafka)
     {
         _kafka = kafka;
-        _api = new ApiFactory(db, kafkaBootstrapServers: kafka.BootstrapServers);
+        _api = new ApiFactory(db, kafkaBootstrapServers: kafka.BootstrapServers, agentEnabled: true);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -68,6 +69,35 @@ public class KafkaTests : IClassFixture<KafkaFixture>, IAsyncLifetime
         var parked = Consume(DisputeTopics.DecisionsDeadLetter, disputeId.ToString());
         Assert.Equal("malformed_event", Encoding.UTF8.GetString(parked.Headers.GetLastBytes("dlq-reason")));
         Assert.Equal(DisputeTopics.Rejected, Encoding.UTF8.GetString(parked.Headers.GetLastBytes("source-topic")));
+    }
+
+    [Fact]
+    public async Task An_agents_decisions_go_through_the_broker_and_come_back_to_the_customers_timeline()
+    {
+        var customer = await _api.CreateCustomerAsync();
+        var tx = await _api.CreateTransactionAsync(customer.Id);
+        var client = await _api.CustomerClientAsync(customer);
+        var agent = await _api.AgentClientAsync(await _api.CreateAgentAsync());
+
+        var raised = await EventsTests.RaiseAsync(client, tx.Id);
+        var disputeId = (await raised.ReadAsync<DisputeDetailResponse>()).Id;
+
+        // 1. Too early: published all the same, and the consumer parks it on the DLQ.
+        var early = await agent.PostAsJsonAsync("/api/agent/disputes/decision", new { disputeId, decision = "RefundIssued" });
+        Assert.Equal(HttpStatusCode.Accepted, early.StatusCode);
+        Assert.Equal(disputeId.ToString(), Consume(DisputeTopics.RefundIssued, disputeId.ToString()).Key);
+        var parked = Consume(DisputeTopics.DecisionsDeadLetter, disputeId.ToString());
+        Assert.Equal("transition_not_allowed", Encoding.UTF8.GetString(parked.Headers.GetLastBytes("dlq-reason")));
+
+        // 2. A move that is allowed reaches the customer's timeline as the agent's.
+        var valid = await agent.PostAsJsonAsync("/api/agent/disputes/decision", new { disputeId, decision = "UnderReview", note = "Looking into it." });
+        Assert.Equal(HttpStatusCode.Accepted, valid.StatusCode);
+        await WaitForStatusAsync(disputeId, DisputeStatus.UnderReview);
+
+        var detail = await (await client.PostAsJsonAsync("/api/disputes/lookup", new { disputeId })).ReadAsync<DisputeDetailResponse>();
+        var entry = detail.Timeline[^1];
+        Assert.Equal(DisputeActor.Agent, entry.ChangedBy);
+        Assert.Equal("Looking into it.", entry.Note);
     }
 
     private Message<string, string> Consume(string topic, string key)

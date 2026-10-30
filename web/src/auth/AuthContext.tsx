@@ -1,16 +1,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { configureAuth, request } from '../api/client'
-import type { LoginResponse } from '../api/types'
+import type { LoginResponse, Role } from '../api/types'
 
 // The session itself is an httpOnly cookie the API sets; JavaScript never sees it. This is only
-// what the portal needs to render after a reload: the name, and when the idle timer runs out.
-// sessionStorage, not localStorage, so it ends with the tab.
+// what the portal needs to render after a reload: the name, the role, and when the idle timer runs
+// out. sessionStorage, not localStorage, so it ends with the tab. The role only picks what to show;
+// the API decides what each session may do.
 const STORAGE_KEY = 'dispute-portal.session'
 
 interface Session {
   displayName: string
   idleTimeoutSeconds: number
+  role: Role
 }
 
 interface StoredSession extends Session {
@@ -41,7 +43,8 @@ function readStoredSession(): StoredSession | null {
     const raw = sessionStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const stored = JSON.parse(raw) as StoredSession
-    return stored.idleExpiresAt > Date.now() ? stored : null
+    // A session stored before agents existed has no role, and can only be a customer's.
+    return stored.idleExpiresAt > Date.now() ? { ...stored, role: stored.role ?? 'customer' } : null
   } catch {
     return null
   }
@@ -65,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const [session, setSession] = useState<Session | null>(() => {
     const stored = readStoredSession()
-    return stored && { displayName: stored.displayName, idleTimeoutSeconds: stored.idleTimeoutSeconds }
+    return stored && { displayName: stored.displayName, idleTimeoutSeconds: stored.idleTimeoutSeconds, role: stored.role }
   })
   const [signedOutReason, setSignedOutReason] = useState<string | null>(null)
   const [idleWarningUntil, setIdleWarningUntil] = useState<number | null>(null)
@@ -145,10 +148,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [session, logout])
 
-  // Any authenticated call restarts the timer; /api/me is the cheapest. A 401 here signs out as usual.
+  // Any authenticated call restarts the timer; /api/me is the cheapest, but customers only. A 401
+  // here signs out as usual.
+  const role = session?.role
   const stayActive = useCallback(async () => {
-    await request('/api/me')
-  }, [])
+    await request(role === 'agent' ? '/api/agent/session' : '/api/me')
+  }, [role])
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -157,7 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: { email, password },
         skipAuthRedirect: true,
       })
-      const next = { displayName: data.displayName, idleTimeoutSeconds: data.idleTimeoutSeconds }
+      const next = { displayName: data.displayName, idleTimeoutSeconds: data.idleTimeoutSeconds, role: data.role }
       scheduleIdleLogout(next, Date.now() + next.idleTimeoutSeconds * 1000)
       setSignedOutReason(null)
       setSession(next)

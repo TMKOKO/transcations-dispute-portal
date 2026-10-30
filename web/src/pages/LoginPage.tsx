@@ -116,6 +116,7 @@ export function LoginPage() {
               <p className="mt-1">
                 thandi@example.com, sipho@example.com or lerato@example.com — password <code>Demo@12345!</code>
               </p>
+              <p className="mt-1">Agent: agent@example.com, same password.</p>
             </div>
           )}
         </div>

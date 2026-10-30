@@ -1,6 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { get, request } from './client'
 import type {
+  AgentDecisionBody,
+  AgentDecisionResult,
+  AgentDispute,
   DisputeDetail,
   DisputeReasonInfo,
   DisputeStatus,
@@ -26,6 +29,7 @@ export const queryKeys = {
   disputes: (status: DisputeStatus | undefined, page: number) => ['disputes', status ?? 'all', page] as const,
   dispute: (id: string) => ['dispute', id] as const,
   reasons: ['dispute-reasons'] as const,
+  agentDisputes: (status: DisputeStatus | undefined, page: number) => ['agent-disputes', status ?? 'all', page] as const,
 }
 
 function qs(params: Record<string, string | number | undefined>): string {
@@ -73,6 +77,25 @@ export function useDispute(id: string) {
     // POST with the id in the body, like useTransaction: keeps the id out of URLs and logs.
     queryFn: async ({ signal }) =>
       (await request<DisputeDetail>('/api/disputes/lookup', { method: 'POST', body: { disputeId: id }, signal })).data,
+  })
+}
+
+/** `pollMs`: while the page waits for a decision to come back from Kafka. Off otherwise. */
+export function useAgentDisputes(status: DisputeStatus | undefined, page: number, pollMs?: number) {
+  return useQuery({
+    queryKey: queryKeys.agentDisputes(status, page),
+    queryFn: ({ signal }) => get<Paged<AgentDispute>>(`/api/agent/disputes${qs({ status, page, pageSize: 20 })}`, signal),
+    placeholderData: keepPreviousData,
+    refetchInterval: pollMs ?? false,
+  })
+}
+
+export function useSendDecision() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: AgentDecisionBody) =>
+      (await request<AgentDecisionResult>('/api/agent/disputes/decision', { method: 'POST', body })).data,
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['agent-disputes'] }),
   })
 }
 

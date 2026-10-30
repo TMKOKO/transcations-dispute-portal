@@ -141,6 +141,21 @@ scripts/backoffice.sh DSP-2026-001025 refund-issued "Refund of R10.00 issued to 
 # Refresh the dispute in the portal: the timeline shows both. kafka-ui (:8081) shows the messages.
 ```
 
+### The agent login
+
+The same flow without a terminal: sign in at :3000 as `agent@example.com` (password `Demo@12345!`) in a private window, alongside the customer. The login is local compose only (`Agent:Enabled`).
+
+The agent page doesn't change disputes. It publishes each decision through the outbox to the topic it would come from in real life, and the consumer judges it. The page warns about moves that will fail, but sends them anyway so you can watch what happens:
+
+| On a Submitted dispute, send | Kafka UI (:8081) shows | The dispute |
+|---|---|---|
+| Refund issued | `dispute-refund-issued`, then `dispute-decisions-dlq` with a `dlq-reason: transition_not_allowed` header | Doesn't change |
+| Under review | `dispute-under-review` | → Under review |
+| Refund issued | `dispute-refund-issued` | → Resolved |
+| Rejected (now it's Resolved) | `dispute-rejected`, and the API logs that it's stale | Doesn't change |
+
+The customer sees each applied decision on the dispute's timeline after a refresh. To replay an event id and show it's only applied once, use `EVENT_ID` with `scripts/backoffice.sh`, as in the drills below.
+
 Drills:
 - **Kafka down:**
   - `docker compose stop kafka`, then raise a dispute: it returns 201.
