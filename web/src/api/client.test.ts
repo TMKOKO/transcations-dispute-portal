@@ -75,6 +75,21 @@ describe('request', () => {
     expect(err).toMatchObject({ status: 409, code: 'dispute_already_open', message: 'Already open.' })
   })
 
+  it('reports a wrong-role 403, but not a 403 for another reason', async () => {
+    const onWrongRole = vi.fn()
+    configureAuth(() => {}, () => {}, onWrongRole)
+    server.use(
+      http.get(api('/api/me'), () => HttpResponse.json({ status: 403, code: 'forbidden' }, { status: 403 })),
+      http.post(api('/api/disputes'), () => HttpResponse.json({ status: 403, code: 'origin_not_allowed' }, { status: 403 })),
+    )
+
+    await expect(request('/api/disputes', { method: 'POST', body: {} })).rejects.toBeInstanceOf(ApiError)
+    expect(onWrongRole).not.toHaveBeenCalled()
+
+    await expect(request('/api/me')).rejects.toBeInstanceOf(ApiError)
+    expect(onWrongRole).toHaveBeenCalledTimes(1)
+  })
+
   it('signs out on 401, except for login itself', async () => {
     const onUnauthorized = vi.fn()
     configureAuth(onUnauthorized)

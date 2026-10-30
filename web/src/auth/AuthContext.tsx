@@ -36,6 +36,9 @@ interface AuthState {
 /** How long before the idle sign-out the customer is warned (half the timeout if that is shorter). */
 const WARNING_LEAD_MS = 60_000
 
+const WRONG_ROLE_MESSAGE =
+  'Another account signed in on this browser, so this tab was signed out. To use two accounts at once, keep one in a private window.'
+
 const AuthContext = createContext<AuthState | null>(null)
 
 function readStoredSession(): StoredSession | null {
@@ -76,14 +79,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const warningTimer = useRef<number | undefined>(undefined)
   const idleDeadline = useRef(0)
 
-  const logout = useCallback(
+  const endInThisTab = useCallback(
     (reason?: string) => {
       window.clearTimeout(idleTimer.current)
       window.clearTimeout(warningTimer.current)
       setIdleWarningUntil(null)
-      // Best effort: revokes the session in Redis and clears the cookie. If the API is unreachable
-      // the session still ends on its own at the idle timeout.
-      request('/api/auth/logout', { method: 'POST', skipAuthRedirect: true }).catch(() => {})
       storeSession(null)
       setSession(null)
       setSignedOutReason(reason ?? null)
@@ -91,6 +91,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       queryClient.clear()
     },
     [queryClient],
+  )
+
+  const logout = useCallback(
+    (reason?: string) => {
+      // Best effort: revokes the session in Redis and clears the cookie. If the API is unreachable
+      // the session still ends on its own at the idle timeout.
+      request('/api/auth/logout', { method: 'POST', skipAuthRedirect: true }).catch(() => {})
+      endInThisTab(reason)
+    },
+    [endInThisTab],
   )
 
   // Mirrors the server's idle timer, so the portal signs out when the session ends rather than
@@ -119,6 +129,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => {
       if (session) scheduleIdleLogout(session, Date.now() + session.idleTimeoutSeconds * 1000)
     },
+    // Not logout(): the cookie now belongs to the other account, which must stay signed in.
+    () => endInThisTab(WRONG_ROLE_MESSAGE),
   )
 
   // A session restored after a reload keeps the deadline it already had.

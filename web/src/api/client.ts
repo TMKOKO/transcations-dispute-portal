@@ -44,14 +44,18 @@ type AuthHandler = () => void
 
 let onUnauthorized: AuthHandler = () => {}
 let onActivity: AuthHandler = () => {}
+let onWrongRole: AuthHandler = () => {}
 
 /**
  * Wired by AuthProvider, so the client never imports React state. `activity` runs after every
  * request the API answered with the session, because each one restarted its idle timer.
+ * `wrongRole` runs on a 403 `forbidden`: RequireRole keeps each role on its own pages, so the cookie
+ * must now belong to someone else, after another account signed in elsewhere in this browser.
  */
-export function configureAuth(unauthorized: AuthHandler, activity: AuthHandler = () => {}) {
+export function configureAuth(unauthorized: AuthHandler, activity: AuthHandler = () => {}, wrongRole: AuthHandler = () => {}) {
   onUnauthorized = unauthorized
   onActivity = activity
+  onWrongRole = wrongRole
 }
 
 export interface RequestOptions {
@@ -100,6 +104,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (!response.ok) {
     if (response.status === 401 && !options.skipAuthRedirect) onUnauthorized()
     const problem = body as ProblemBody | null
+    if (response.status === 403 && problem?.code === 'forbidden' && !options.skipAuthRedirect) onWrongRole()
     throw new ApiError(response.status, messageFromProblem(problem, response.status), problem?.code, problem?.errors)
   }
 

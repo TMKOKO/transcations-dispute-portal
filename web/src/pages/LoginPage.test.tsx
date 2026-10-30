@@ -70,4 +70,23 @@ describe('LoginPage', () => {
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Your session has ended')
   })
+
+  it('signs out this tab only when another account has taken over the browser', async () => {
+    let logoutCalls = 0
+    server.use(
+      http.get(api('/api/transactions'), () =>
+        HttpResponse.json({ status: 403, detail: 'You do not have access to this.', code: 'forbidden' }, { status: 403 }),
+      ),
+      http.post(api('/api/auth/logout'), () => {
+        logoutCalls++
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    renderApp('/transactions')
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Another account signed in on this browser')
+    // The cookie is the other account's now; signing out here would end that session too.
+    expect(logoutCalls).toBe(0)
+  })
 })
