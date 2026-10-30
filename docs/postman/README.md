@@ -62,3 +62,10 @@ Messages never repeat the rejected value.
 - `/api/auth/login` allows 10 requests per minute per client. Running the collection several times in a minute can hit this and return 429; wait a minute.
 - A session ends after 5 minutes without a request (every request restarts the timer), 8 hours after sign-in, or at Sign out. On a 401, run the login requests again.
 - Reviewing disputes (Under review, Resolved, Rejected) happens in the bank's back office and is out of scope for this API. The seeded disputes already show every status on the portal's timelines.
+- **Watching the Kafka events:**
+  - Raise dispute and Withdraw dispute also publish `DisputeSubmitted` and `DisputeWithdrawn` events.
+  - Start the stack with `docker compose --profile tools up -d` and open Kafka UI on http://localhost:8081 to watch them on the `dispute-submitted` and `dispute-withdrawn` topics.
+- **Making a back-office decision:**
+  - Run `scripts/backoffice.sh <dispute number> under-review`, then `refund-issued` or `rejected`.
+  - Look up the dispute again to see the new status. See `docs/resilience.md`.
+  - Run the decision before Withdraw dispute, or the withdraw request gets a 409.

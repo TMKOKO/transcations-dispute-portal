@@ -1,10 +1,14 @@
-# API stack: PostgreSQL + API, one command:
+# API stack: PostgreSQL (primary + read replica), Redis, Kafka and the API, one command:
 #   docker compose up --build
 # API: http://localhost:8080/swagger
+# Add --profile tools for Kafka UI on http://localhost:8081.
 # The portal is a separate project with its own compose file — see web/README.md.
 services:
   db:
     image: postgres:16-alpine
+    # The image's pg_hba plus a replication line for db-replica; keep enough WAL for it to catch up
+    # after a restart. Command-line settings, so they also apply to an existing pgdata volume.
+    command: ["postgres", "-c", "hba_file=/etc/postgresql/pg_hba.conf", "-c", "wal_keep_size=256MB"]
     # 5433 on the host so this does not collide with a locally installed PostgreSQL on 5432.
     ports:
       - "5433:5432"
@@ -14,11 +18,89 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d disputes"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Hot standby streaming from db: the API's customer-facing reads go here (ReadStore), and fall back
+  # to db if it is down. Locally it replicates as the postgres superuser; production uses its own role.
+  db-replica:
+    image: postgres:16-alpine
+    entrypoint: ["/bin/sh", "/usr/local/bin/replica-entrypoint.sh"]
+    ports:
+      - "5434:5432"
+    environment:
+      PRIMARY_HOST: db
+      PRIMARY_USER: postgres
+      PGPASSWORD: postgres
+    volumes:
+      - pgdata-replica:/var/lib/postgresql/data
+      - ./docker/postgres/replica-entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d disputes"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Dispute events. Single-node KRaft (no ZooKeeper). Containers use kafka:9092; the host uses
+  # localhost:9094 (kafka-console tools, a local dotnet run).
+  kafka:
+    image: apache/kafka:3.8.0
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics come from kafka-init only, so a typo in a topic name fails instead of creating a new one.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
+    # No volume: topics and offsets live in the container, so they survive a stop/start (the failure
+    # drills) but not a "docker compose down". kafka-init recreates the topics.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  kafka-init:
+    image: apache/kafka:3.8.0
+    entrypoint: ["/bin/sh", "/usr/local/bin/create-topics.sh"]
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+    volumes:
+      - ./docker/kafka/create-topics.sh:/usr/local/bin/create-topics.sh:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    profiles: ["tools"]
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
 
   # Server-side sessions. Nothing is persisted: a restart signs everyone out, which is fine for a
   # 5-minute idle session. 6380 on the host for `dotnet run` (appsettings.Development.json).
@@ -39,6 +121,9 @@ services:
       - "8080:8080"
     environment:
       ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=disputes;Username=postgres;Password=postgres"
+      ConnectionStrings__ReadOnlyConnection: "Host=db-replica;Port=5432;Database=disputes;Username=postgres;Password=postgres"
+      Kafka__Enabled: "true"
+      Kafka__BootstrapServers: "kafka:9092"
       # Development turns on demo seeding and Swagger. Never use it outside a local demo.
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Redis: "redis:6379"
@@ -52,7 +137,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Started first so the demo works at once. Not required: the API serves customers without
+      # either (reads fall back to db, events wait in the outbox).
+      db-replica:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
   pgdata:
+  pgdata-replica:

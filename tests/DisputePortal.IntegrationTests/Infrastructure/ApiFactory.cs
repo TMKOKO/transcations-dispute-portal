@@ -21,15 +21,21 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly string _redisConnectionString;
     private readonly int _authPermitsPerMinute;
     private readonly TimeProvider? _clock;
+    private readonly string? _readOnlyConnectionString;
+    private readonly string? _kafkaBootstrapServers;
 
     /// <param name="redisConnectionString">Override to point the API at a Redis that is not there.</param>
+    /// <param name="readOnlyConnectionString">A read replica; the test database itself, or one that is not there.</param>
+    /// <param name="kafkaBootstrapServers">Turns Kafka on (outbox publisher and decision consumer). Off by default.</param>
     public ApiFactory(ContainersFixture containers, int authPermitsPerMinute = 10_000, TimeProvider? clock = null,
-        string? redisConnectionString = null)
+        string? redisConnectionString = null, string? readOnlyConnectionString = null, string? kafkaBootstrapServers = null)
     {
         _connectionString = containers.ConnectionString;
         _redisConnectionString = redisConnectionString ?? containers.RedisConnectionString;
         _authPermitsPerMinute = authPermitsPerMinute;
         _clock = clock;
+        _readOnlyConnectionString = readOnlyConnectionString;
+        _kafkaBootstrapServers = kafkaBootstrapServers;
         Redis = containers.Redis;
 
         // https, so the client's cookie container sends the Secure session cookie back.
@@ -52,6 +58,17 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("RateLimiting:GeneralPermitsPerMinute", "100000");
         builder.UseSetting("Cors:AllowedOrigins:0", "https://portal.example.test");
 
+        if (_readOnlyConnectionString is not null)
+            builder.UseSetting("ConnectionStrings:ReadOnlyConnection", _readOnlyConnectionString);
+
+        if (_kafkaBootstrapServers is not null)
+        {
+            builder.UseSetting("Kafka:Enabled", "true");
+            builder.UseSetting("Kafka:BootstrapServers", _kafkaBootstrapServers);
+            // A fresh group per factory, so a test reads only what it produced from the start of the topic.
+            builder.UseSetting("Kafka:GroupId", $"dispute-portal-test-{Guid.NewGuid():N}");
+        }
+
         if (_clock is not null)
             builder.ConfigureTestServices(services => services.AddSingleton(_clock));
 
@@ -65,6 +82,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         using var scope = Services.CreateScope();
         return await action(scope.ServiceProvider.GetRequiredService<AppDbContext>());
+    }
+
+    /// <summary>Runs <paramref name="action"/> with a fresh scope's service of type <typeparamref name="TService"/>.</summary>
+    public async Task<T> WithServiceAsync<TService, T>(Func<TService, Task<T>> action) where TService : notnull
+    {
+        using var scope = Services.CreateScope();
+        return await action(scope.ServiceProvider.GetRequiredService<TService>());
     }
 
     public Task WithDbAsync(Func<AppDbContext, Task> action) =>

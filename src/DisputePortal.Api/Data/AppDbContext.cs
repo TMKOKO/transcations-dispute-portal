@@ -12,12 +12,19 @@ public class AppDbContext : DbContext
     public const string ActiveDisputeIndex = "ux_disputes_one_active_per_transaction";
     public const string IdempotencyIndex   = "ux_disputes_customer_idempotency_key";
 
+    public const string InboxPrimaryKey = "PK_InboxMessages";
+
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+    // For ReadDbContext: the same model on another connection.
+    protected AppDbContext(DbContextOptions options) : base(options) { }
 
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<Dispute> Disputes => Set<Dispute>();
     public DbSet<DisputeStatusHistory> DisputeStatusHistory => Set<DisputeStatusHistory>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
 
     // A compile-time constant, not an interpolated string: no caller input ever reaches this SQL.
     private const string NextDisputeSequenceSql =
@@ -116,6 +123,29 @@ public class AppDbContext : DbContext
             entity.Property(e => e.ToStatus).HasConversion<string>().HasMaxLength(20);
             entity.Property(e => e.Note).HasMaxLength(500);
             entity.Property(e => e.ChangedBy).IsRequired().HasMaxLength(20);
+        });
+
+        modelBuilder.Entity<OutboxMessage>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.EventId).IsUnique();
+            // OutboxRelay only ever reads unpublished rows, oldest first.
+            entity.HasIndex(e => e.Id)
+                  .HasDatabaseName("ix_outbox_unpublished")
+                  .HasFilter("\"PublishedAt\" IS NULL");
+            entity.Property(e => e.EventType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.Topic).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Key).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Payload).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.LastError).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<InboxMessage>(entity =>
+        {
+            // Named so DecisionHandler can tell a duplicate delivery from any other unique violation.
+            entity.HasKey(e => e.EventId).HasName(InboxPrimaryKey);
+            entity.Property(e => e.EventType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.Outcome).IsRequired().HasMaxLength(20);
         });
     }
 }

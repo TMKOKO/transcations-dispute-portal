@@ -1,5 +1,6 @@
 using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
+using DisputePortal.Api.Events;
 using DisputePortal.Api.Models;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -99,6 +100,8 @@ public sealed class DisputeService : IDisputeService
             now);
 
         _db.Disputes.Add(dispute);
+        // Same SaveChanges as the dispute: the event commits with it or not at all (outbox).
+        _db.OutboxMessages.Add(OutboxMessage.For(DisputeTopics.Submitted, DisputeEvent.Submitted(dispute, transaction.Currency, now)));
 
         try
         {
@@ -159,7 +162,10 @@ public sealed class DisputeService : IDisputeService
                     : $"This dispute is {Describe(dispute.Status)} and cannot be moved to {Describe(to)}.");
 
         var from = dispute.Status;
-        dispute.TransitionTo(to, actor, note, _clock.GetUtcNow().UtcDateTime);
+        var now = _clock.GetUtcNow().UtcDateTime;
+        dispute.TransitionTo(to, actor, note, now);
+        if (to == DisputeStatus.Withdrawn)
+            _db.OutboxMessages.Add(OutboxMessage.For(DisputeTopics.Withdrawn, DisputeEvent.Withdrawn(dispute, now)));
 
         try
         {

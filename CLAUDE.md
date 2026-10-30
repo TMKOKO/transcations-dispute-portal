@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Transactions Dispute Portal: an ASP.NET Core 8 API (`src/DisputePortal.Api`, PostgreSQL 16 via EF Core/Npgsql, Redis 7 for sessions) and a separate React customer portal (`web/`). Customers sign in, browse their own transactions, raise disputes and withdraw them. Reviewing disputes (Under review / Resolved / Rejected) is the bank's back office and deliberately out of scope; there is no agent API.
+Transactions Dispute Portal: an ASP.NET Core 8 API (`src/DisputePortal.Api`, PostgreSQL 16 via EF Core/Npgsql with a read replica, Redis 7 for sessions, Kafka for dispute events) and a separate React customer portal (`web/`). Customers sign in, browse their own transactions, raise disputes and withdraw them. Reviewing disputes is the bank's back office and deliberately out of scope; there is no agent API. The back office's decisions (Under review / Refund issued → Resolved / Rejected) reach the API only as Kafka events. `docs/resilience.md` explains the event flow and failure modes.
 
 ## Commands
 
@@ -13,7 +13,7 @@ dotnet build DisputePortal.sln                      # TreatWarningsAsErrors is o
 dotnet test tests/DisputePortal.UnitTests
 dotnet test tests/DisputePortal.IntegrationTests    # needs Docker running (Testcontainers starts postgres:16-alpine and redis:7-alpine)
 dotnet test tests/DisputePortal.IntegrationTests --filter "FullyQualifiedName~DisputesTests.Dispute_ids_travel_in_the_body_not_the_url"
-dotnet tool restore && dotnet ef migrations add <Name> --project src/DisputePortal.Api --output-dir Data/Migrations
+dotnet tool restore && dotnet ef migrations add <Name> --project src/DisputePortal.Api --output-dir Data/Migrations --context AppDbContext   # --context: ReadDbContext shares the model
 ```
 
 Run the two test projects separately rather than the whole solution at once; on this machine a combined run has been killed for low memory. There is no CI (`.github/workflows` is empty), so these local runs are the only check before a PR.
@@ -21,10 +21,14 @@ Run the two test projects separately rather than the whole solution at once; on 
 Local stack:
 
 ```bash
-docker compose up --build -d            # repo root: db (host port 5433) + redis (host port 6380) + API on http://localhost:8080 (/swagger, /health)
+docker compose up --build -d            # repo root: db (5433) + db-replica (5434) + redis (6380) + kafka (9094) + API on http://localhost:8080 (/swagger, /health)
+docker compose --profile tools up -d    # + Kafka UI on http://localhost:8081
 cd web && docker compose up --build -d  # portal on http://localhost:3000 (start the API first)
 docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d   # + Grafana on :3001 (admin/admin), Loki, Alloy
+scripts/backoffice.sh DSP-2026-001000 under-review|refund-issued|rejected ["note"]   # play the back office: publish a decision
 ```
+
+`docker/postgres/` holds the primary's `pg_hba.conf` (adds a replication line) and `replica-entrypoint.sh` (`pg_basebackup` on first start). `docker/kafka/create-topics.sh` is run by the one-shot `kafka-init` service. Broker auto-create is off, so a new topic goes there and in `Events/DisputeTopics.cs`.
 
 The observability overlay (`observability/README.md`) switches the API's logs to JSON. Dashboard panels match log lines by their message text (for example `|= "signed in; session"`, `|= "failed with"`), so rewording a log message in the API means updating `observability/grafana/dashboards/dispute-portal.json` too. Grafana's `grafana_reader` database role has column-level grants (`observability/postgres/grafana-reader.sql`); a new panel column needs a new grant there.
 
@@ -71,6 +75,28 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - `DisputeService` catches unique violations by constraint name to tell a lost race apart from a replay.
 - Raising requires an `Idempotency-Key` header. A replay returns the original dispute with an `Idempotent-Replayed` header.
 
+**Reads (replica).**
+- ViewModel reads go through `ReadStore.QueryAsync(customerId, "label", db => …)` (`Data/ReadStore.cs`), never a raw DbContext. Queries must be `AsNoTracking`, and the label is a fixed string.
+- `ReadStore` uses `ReadDbContext` on `ConnectionStrings:ReadOnlyConnection` (unset: the primary, and the replica logic is skipped).
+- If the replica is unreachable, the read runs once more on the primary and logs "Read replica unavailable".
+- After a raise or withdraw, `ReadYourWrites.MarkAsync` sets Redis key `rw:{customerId}` (5 s), and that customer's reads use the primary.
+- Anything that decides a write (`DisputeService`, login, `DecisionHandler`) reads `AppDbContext`, the primary.
+- Both contexts use `EnableRetryOnFailure`, so an explicit `BeginTransaction` must run inside `Database.CreateExecutionStrategy().ExecuteAsync` (see `OutboxRelay`).
+
+**Dispute events (Kafka, `Events/`).** One topic per event, keyed by dispute id; the constants are in `DisputeTopics.cs`, and the JSON envelope is `DisputeEvent.cs`.
+- **Never put the description or a customer's withdraw note in an event** (claim check: consumers read the dispute by id).
+- **Outbound** (`dispute-submitted`, `dispute-withdrawn`) uses a transactional outbox:
+  - `DisputeService` adds an `OutboxMessage` in the same `SaveChanges` as the change;
+  - `OutboxPublisherService` runs `OutboxRelay` (`FOR UPDATE SKIP LOCKED`, in Id order, stops at the first failure) with backoff.
+  - Kafka down never fails a request.
+- **Inbound** (`dispute-under-review`, `dispute-refund-issued` → Resolved, `dispute-rejected`):
+  - `DecisionConsumer` (manual commit after the handler) feeds `DecisionHandler`.
+  - The handler applies `TransitionTo(…, DisputeActor.Agent, note)` plus an `InboxMessage` (PK = eventId) in one `SaveChanges`.
+  - Duplicates and stale events are skipped. Anything that can never apply is a `DecisionResult.DeadLetter(reason)`, which the consumer sends to `dispute-decisions-dlq` and commits.
+  - Exceptions mean "retry": the consumer seeks back and backs off.
+- `Kafka:Enabled` is off by default and in tests: outbox rows are still written, but no publisher or consumer runs.
+- `/health` reports the `outbox` and `read-replica` checks as Degraded, never Unhealthy.
+
 **Dates.** Stored in UTC; customers filter by SAST calendar dates (`Helpers/Sast.cs`, fixed UTC+2). "Now" always comes from the injected `TimeProvider` so tests can pin it.
 
 **Cross-cutting (Program.cs).**
@@ -93,9 +119,13 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - Validation fails fast. `InvalidModelStateResponseFactory` in `Program.cs` trims each field to the first rule it broke and re-keys `IValidatableObject` results from C# names (`Note`) to JSON names (`note`). So a 400's `errors` has exactly one message per field, under the name the client sent.
 
 **Tests.**
-- Unit tests cover eligibility, the state machine and request validation.
+- Unit tests cover eligibility, the state machine, request validation and the event envelope.
 - Integration tests use `ApiFactory` (`WebApplicationFactory<Program>`). It runs in the "Testing" environment: no seed, no Swagger, rate limits raised.
 - All tests share one Postgres and one Redis container (`ContainersFixture`) via `[Collection(ApiCollection.Name)]`. `CreateCustomerAsync` gives each test its own customer.
+- `EventsTests` covers the outbox, `OutboxRelay` (with a fake `IEventPublisher`) and `DecisionHandler` directly, with no broker.
+- `KafkaTests` is the one class with a real broker: an `IClassFixture<KafkaFixture>` running `apache/kafka`, with `ApiFactory(kafkaBootstrapServers:)`.
+- `ApiFactory(readOnlyConnectionString:)` sets up a replica: either the test database, or a dead port for failover tests.
+- The outbox table is shared, so a test asserts on its own dispute's rows (`Key` = dispute id).
 - Clients use `https://localhost` so the Secure cookie flows. `CustomerClientAsync` signs in through the client's cookie container. `ClientWithSession(id)` sends a raw session id, and `ApiFactory.Redis` asserts on keys and TTLs.
 
 **Web portal.**
