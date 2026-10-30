@@ -33,9 +33,11 @@ export interface Paged<T> {
 /** No token: the session is an httpOnly cookie. */
 export interface LoginResponse {
   displayName: string
-  role: 'customer'
+  role: Role
   idleTimeoutSeconds: number
 }
+
+export type Role = 'customer' | 'agent'
 
 export interface Me {
   id: string
@@ -107,6 +109,32 @@ export interface DisputeReasonInfo {
   code: DisputeReason
   label: string
   description: string
+}
+
+export type DisputeDecision = 'UnderReview' | 'RefundIssued' | 'Rejected'
+
+export interface AgentDispute {
+  id: string
+  disputeNumber: string
+  status: DisputeStatus
+  reason: DisputeReason
+  disputedAmount: number
+  currency: string
+  merchantName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AgentDecisionBody {
+  disputeId: string
+  decision: DisputeDecision
+  note?: string
+}
+
+export interface AgentDecisionResult {
+  eventId: string
+  eventType: string
+  topic: string
 }
 
 export interface RaiseDisputeBody {

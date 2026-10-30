@@ -8,17 +8,20 @@ using StackExchange.Redis;
 
 namespace DisputePortal.Api.Services;
 
-public sealed record CustomerSession(Guid CustomerId, DateTimeOffset CreatedAt);
+/// <summary>Who a session belongs to: a customer or an agent, never both.</summary>
+public sealed record SessionData(Guid? CustomerId, Guid? AgentId, DateTimeOffset CreatedAt);
 
 /// <summary>A new session and the id that goes in the cookie. The id is never stored or logged.</summary>
-public sealed record IssuedSession(string Id, CustomerSession Session);
+public sealed record IssuedSession(string Id, SessionData Session);
 
 public interface ISessionStore
 {
     Task<IssuedSession> CreateAsync(Guid customerId);
 
+    Task<IssuedSession> CreateForAgentAsync(Guid agentId);
+
     /// <summary>The live session for this id, with its idle timer restarted; null if it has ended.</summary>
-    Task<CustomerSession?> TouchAsync(string sessionId);
+    Task<SessionData?> TouchAsync(string sessionId);
 
     Task DeleteAsync(string sessionId);
 }
@@ -48,16 +51,21 @@ public sealed class RedisSessionStore : ISessionStore
     internal static string KeyFor(string sessionId) =>
         "session:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sessionId))).ToLowerInvariant();
 
-    public async Task<IssuedSession> CreateAsync(Guid customerId)
+    public Task<IssuedSession> CreateAsync(Guid customerId) =>
+        StoreAsync(new SessionData(customerId, null, _clock.GetUtcNow()));
+
+    public Task<IssuedSession> CreateForAgentAsync(Guid agentId) =>
+        StoreAsync(new SessionData(null, agentId, _clock.GetUtcNow()));
+
+    private async Task<IssuedSession> StoreAsync(SessionData session)
     {
         var id = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
-        var session = new CustomerSession(customerId, _clock.GetUtcNow());
 
         await Db.StringSetAsync(KeyFor(id), JsonSerializer.Serialize(session), _options.IdleTimeout);
         return new IssuedSession(id, session);
     }
 
-    public async Task<CustomerSession?> TouchAsync(string sessionId)
+    public async Task<SessionData?> TouchAsync(string sessionId)
     {
         // Anything else cannot be one of ours; skip the round trip.
         if (sessionId.Length != IdLength) return null;
@@ -67,7 +75,7 @@ public sealed class RedisSessionStore : ISessionStore
         var value = await Db.StringGetSetExpiryAsync(key, _options.IdleTimeout);
         if (value.IsNullOrEmpty) return null;
 
-        var session = JsonSerializer.Deserialize<CustomerSession>(value.ToString());
+        var session = JsonSerializer.Deserialize<SessionData>(value.ToString());
         if (session is null)
         {
             await Db.KeyDeleteAsync(key);

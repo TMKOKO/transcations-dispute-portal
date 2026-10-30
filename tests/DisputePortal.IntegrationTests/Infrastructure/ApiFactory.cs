@@ -23,13 +23,17 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly TimeProvider? _clock;
     private readonly string? _readOnlyConnectionString;
     private readonly string? _kafkaBootstrapServers;
+    private readonly bool _agentEnabled;
 
     /// <param name="redisConnectionString">Override to point the API at a Redis that is not there.</param>
     /// <param name="readOnlyConnectionString">A read replica; the test database itself, or one that is not there.</param>
     /// <param name="kafkaBootstrapServers">Turns Kafka on (outbox publisher and decision consumer). Off by default.</param>
+    /// <param name="agentEnabled">Turns the demo agent login on. Off by default, as in production.</param>
     public ApiFactory(ContainersFixture containers, int authPermitsPerMinute = 10_000, TimeProvider? clock = null,
-        string? redisConnectionString = null, string? readOnlyConnectionString = null, string? kafkaBootstrapServers = null)
+        string? redisConnectionString = null, string? readOnlyConnectionString = null, string? kafkaBootstrapServers = null,
+        bool agentEnabled = false)
     {
+        _agentEnabled = agentEnabled;
         _connectionString = containers.ConnectionString;
         _redisConnectionString = redisConnectionString ?? containers.RedisConnectionString;
         _authPermitsPerMinute = authPermitsPerMinute;
@@ -57,6 +61,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("RateLimiting:AuthPermitsPerMinute", _authPermitsPerMinute.ToString());
         builder.UseSetting("RateLimiting:GeneralPermitsPerMinute", "100000");
         builder.UseSetting("Cors:AllowedOrigins:0", "https://portal.example.test");
+        builder.UseSetting("Agent:Enabled", _agentEnabled ? "true" : "false");
 
         if (_readOnlyConnectionString is not null)
             builder.UseSetting("ConnectionStrings:ReadOnlyConnection", _readOnlyConnectionString);
@@ -109,6 +114,19 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         return customer;
     });
 
+    public Task<Agent> CreateAgentAsync() => WithDbAsync(async db =>
+    {
+        var agent = new Agent
+        {
+            DisplayName  = "Test Agent",
+            Email        = $"{Guid.NewGuid():N}@example.test",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(Password, workFactor: 4),
+        };
+        db.Agents.Add(agent);
+        await db.SaveChangesAsync();
+        return agent;
+    });
+
     public Task<Transaction> CreateTransactionAsync(
         Guid customerId,
         decimal amount = 250m,
@@ -143,6 +161,17 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         var client = CreateClient();
         (await LoginAsync(client, customer)).EnsureSuccessStatusCode();
+        return client;
+    }
+
+    public static Task<HttpResponseMessage> LoginAsync(HttpClient client, Agent agent) =>
+        client.PostAsJsonAsync("/api/auth/login", new { email = agent.Email, password = Password });
+
+    /// <summary>A client signed in as this agent; its cookie container carries the session.</summary>
+    public async Task<HttpClient> AgentClientAsync(Agent agent)
+    {
+        var client = CreateClient();
+        (await LoginAsync(client, agent)).EnsureSuccessStatusCode();
         return client;
     }
 

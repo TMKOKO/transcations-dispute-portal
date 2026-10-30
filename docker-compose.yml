@@ -124,6 +124,9 @@ services:
       ConnectionStrings__ReadOnlyConnection: "Host=db-replica;Port=5432;Database=disputes;Username=postgres;Password=postgres"
       Kafka__Enabled: "true"
       Kafka__BootstrapServers: "kafka:9092"
+      # The demo agent login, which plays the back office from the portal. Never in production:
+      # its seeded account shares the published demo password.
+      Agent__Enabled: "true"
       # Development turns on demo seeding and Swagger. Never use it outside a local demo.
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Redis: "redis:6379"

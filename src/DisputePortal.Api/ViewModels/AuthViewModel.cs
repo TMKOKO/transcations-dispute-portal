@@ -23,13 +23,16 @@ public sealed class AuthViewModel
     private readonly AppDbContext _db;
     private readonly ISessionStore _sessions;
     private readonly CustomerSessionOptions _session;
+    private readonly AgentOptions _agents;
     private readonly ILogger<AuthViewModel> _logger;
 
-    public AuthViewModel(AppDbContext db, ISessionStore sessions, IOptions<CustomerSessionOptions> session, ILogger<AuthViewModel> logger)
+    public AuthViewModel(AppDbContext db, ISessionStore sessions, IOptions<CustomerSessionOptions> session,
+        IOptions<AgentOptions> agents, ILogger<AuthViewModel> logger)
     {
         _db = db;
         _sessions = sessions;
         _session = session.Value;
+        _agents = agents.Value;
         _logger = logger;
     }
 
@@ -47,10 +50,18 @@ public sealed class AuthViewModel
         else
             _logger.LogInformation("Login lookup: customer {CustomerId} found", customer.Id);
 
-        if (!Verify(request.Password, customer?.PasswordHash))
+        var agent = customer is null && _agents.Enabled
+            ? await _db.Agents.AsNoTracking().FirstOrDefaultAsync(a => a.Email == email, ct)
+            : null;
+        if (agent is not null)
+            _logger.LogInformation("Login lookup: agent {AgentId} found", agent.Id);
+
+        if (!Verify(request.Password, customer?.PasswordHash ?? agent?.PasswordHash))
         {
             // The real reason stays in the log; the caller gets the same 401 either way.
-            if (customer is null)
+            if (agent is not null)
+                _logger.LogWarning("Agent login failed: wrong password for agent {AgentId}", agent.Id);
+            else if (customer is null)
                 _logger.LogWarning("Customer login failed: no account for that email");
             else
                 _logger.LogWarning("Customer login failed: wrong password for customer {CustomerId}", customer.Id);
@@ -63,6 +74,14 @@ public sealed class AuthViewModel
         if (previousSessionId is not null)
             await _sessions.DeleteAsync(previousSessionId);
 
+        if (agent is not null)
+        {
+            var agentSession = await _sessions.CreateForAgentAsync(agent.Id);
+            _logger.LogInformation("Agent {AgentId} signed in; session idle timeout {IdleTimeout}", agent.Id, _session.IdleTimeout);
+            return ServiceResult<SignedIn>.Ok(new SignedIn(agentSession.Id,
+                new LoginResponse(agent.DisplayName, SessionClaims.AgentRole, (int)_session.IdleTimeout.TotalSeconds)));
+        }
+
         var issued = await _sessions.CreateAsync(customer!.Id);
         _logger.LogInformation("Customer {CustomerId} signed in; session idle timeout {IdleTimeout}", customer.Id, _session.IdleTimeout);
         return ServiceResult<SignedIn>.Ok(new SignedIn(issued.Id,
@@ -70,12 +89,15 @@ public sealed class AuthViewModel
     }
 
     /// <summary>Ends the session, if there is one.</summary>
-    public async Task LogoutAsync(string? sessionId, Guid? customerId)
+    public async Task LogoutAsync(string? sessionId, Guid? customerId, Guid? agentId)
     {
         if (sessionId is not null)
             await _sessions.DeleteAsync(sessionId);
 
-        _logger.LogInformation("Customer {CustomerId} signed out", customerId);
+        if (agentId is not null)
+            _logger.LogInformation("Agent {AgentId} signed out", agentId);
+        else
+            _logger.LogInformation("Customer {CustomerId} signed out", customerId);
     }
 
     private static string Normalise(string email) => email.Trim().ToLowerInvariant();

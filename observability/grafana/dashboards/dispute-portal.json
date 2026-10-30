@@ -543,7 +543,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({service=\"api\"} |= \"Customer login failed\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"api\"} |~ \"(Customer|Agent) login failed\" [$__auto]))",
           "legendFormat": "Failed",
           "queryType": "range",
           "editorMode": "code"

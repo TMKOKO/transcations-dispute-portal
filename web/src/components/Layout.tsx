@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router'
+import type { Role } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { homeFor, paths } from '../lib/routes'
 import { IdleWarningDialog } from './IdleWarningDialog'
 
 /** Gate for every signed-in page. Remembers where the customer was going, for after login. */
@@ -9,6 +11,16 @@ export function RequireAuth() {
   const location = useLocation()
   if (!isAuthenticated) return <Navigate to="/login" replace state={{ from: location.pathname + location.search, fromState: location.state }} />
   return <Layout />
+}
+
+/**
+ * Pages for one role only; anyone else goes to their own home page. This also settles the login
+ * page's "back to where you were going" when an agent signs in after a customer's session ended.
+ */
+export function RequireRole({ role }: { role: Role }) {
+  const { session } = useAuth()
+  if (session?.role !== role) return <Navigate to={homeFor(session?.role)} replace />
+  return <Outlet />
 }
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -34,17 +46,25 @@ function Layout() {
       </a>
       <header className="bg-brand-900">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <Link to="/transactions" className="flex items-center gap-2 text-white">
+          <Link to={homeFor(session?.role)} className="flex items-center gap-2 text-white">
             <img src="/favicon.svg" alt="" className="size-7" />
             <span className="font-semibold tracking-tight">Dispute Portal</span>
           </Link>
           <nav aria-label="Main" className="order-3 flex w-full gap-1 sm:order-none sm:w-auto">
-            <NavLink to="/transactions" className={navClass}>
-              Transactions
-            </NavLink>
-            <NavLink to="/disputes" className={navClass}>
-              My disputes
-            </NavLink>
+            {session?.role === 'agent' ? (
+              <NavLink to={paths.agentDisputes} className={navClass}>
+                All disputes
+              </NavLink>
+            ) : (
+              <>
+                <NavLink to="/transactions" className={navClass}>
+                  Transactions
+                </NavLink>
+                <NavLink to="/disputes" className={navClass}>
+                  My disputes
+                </NavLink>
+              </>
+            )}
           </nav>
           <div className="flex items-center gap-3 text-sm text-brand-100">
             <span className="hidden sm:inline">Hi, {session?.displayName}</span>

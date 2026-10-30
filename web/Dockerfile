@@ -10,7 +10,8 @@ COPY . .
 # leave it false for anything but a local demo.
 ARG VITE_API_BASE=http://localhost:8080
 ARG VITE_DEMO_HINT=false
-ENV VITE_API_BASE=$VITE_API_BASE VITE_DEMO_HINT=$VITE_DEMO_HINT
+ARG VITE_KAFKA_UI_URL=
+ENV VITE_API_BASE=$VITE_API_BASE VITE_DEMO_HINT=$VITE_DEMO_HINT VITE_KAFKA_UI_URL=$VITE_KAFKA_UI_URL
 RUN npm run build
 
 # Stage 2: Serve with nginx as a non-root user (listens on 8080)

@@ -35,6 +35,30 @@ public static class DbSeeder
         new("Nando's",          "Restaurants",     TransactionChannel.Card, 120,   600),
     ];
 
+    /// <summary>
+    /// The demo agent. Separate from <see cref="SeedAsync"/>, which stops as soon as customers exist:
+    /// a database seeded before this login existed must still get its agent.
+    /// </summary>
+    public static async Task SeedAgentAsync(AppDbContext db, TimeProvider clock, ILogger logger, CancellationToken ct = default)
+    {
+        if (await db.Agents.AnyAsync(ct))
+        {
+            logger.LogInformation("Demo agent seed skipped: an agent already exists");
+            return;
+        }
+
+        var agent = new Agent
+        {
+            DisplayName  = "Disputes Agent",
+            Email        = "agent@example.com",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(DemoPassword),
+            CreatedAt    = clock.GetUtcNow().UtcDateTime,
+        };
+        db.Agents.Add(agent);
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Demo agent seed saved agent {AgentId}", agent.Id);
+    }
+
     public static async Task SeedAsync(AppDbContext db, TimeProvider clock, ILogger logger, CancellationToken ct = default)
     {
         if (await db.Customers.AnyAsync(ct))

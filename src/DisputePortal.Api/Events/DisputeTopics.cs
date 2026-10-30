@@ -32,6 +32,15 @@ public static class DisputeTopics
         Rejected     => (DisputeEventTypes.Rejected, DisputeStatus.Rejected),
         _ => null
     };
+
+    /// <summary>The topic and event type an agent's decision goes out as; the reverse of <see cref="DecisionFor"/>.</summary>
+    public static (string Topic, string EventType) ForDecision(DisputeDecision decision) => decision switch
+    {
+        DisputeDecision.UnderReview  => (UnderReview, DisputeEventTypes.UnderReview),
+        DisputeDecision.RefundIssued => (RefundIssued, DisputeEventTypes.RefundIssued),
+        DisputeDecision.Rejected     => (Rejected, DisputeEventTypes.Rejected),
+        _ => throw new ArgumentOutOfRangeException(nameof(decision), decision, "Not a decision."),
+    };
 }
 
 public static class DisputeEventTypes

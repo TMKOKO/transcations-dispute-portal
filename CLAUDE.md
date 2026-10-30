@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Transactions Dispute Portal: an ASP.NET Core 8 API (`src/DisputePortal.Api`, PostgreSQL 16 via EF Core/Npgsql with a read replica, Redis 7 for sessions, Kafka for dispute events) and a separate React customer portal (`web/`). Customers sign in, browse their own transactions, raise disputes and withdraw them. Reviewing disputes is the bank's back office and deliberately out of scope; there is no agent API. The back office's decisions (Under review / Refund issued → Resolved / Rejected) reach the API only as Kafka events. `docs/resilience.md` explains the event flow and failure modes.
+Transactions Dispute Portal: an ASP.NET Core 8 API (`src/DisputePortal.Api`, PostgreSQL 16 via EF Core/Npgsql with a read replica, Redis 7 for sessions, Kafka for dispute events) and a separate React customer portal (`web/`). Customers sign in, browse their own transactions, raise disputes and withdraw them. Reviewing disputes is the bank's back office and deliberately out of scope. The back office's decisions (Under review / Refund issued → Resolved / Rejected) reach the API only as Kafka events. A demo agent login (off unless `Agent:Enabled`, on only in local compose) plays the back office from the portal, and it follows the same rule: it publishes decisions, it never changes a dispute. `docs/resilience.md` explains the event flow and failure modes.
 
 ## Commands
 
@@ -11,7 +11,7 @@ API (repo root; .NET SDK 8.0.206 per `global.json`):
 ```bash
 dotnet build DisputePortal.sln                      # TreatWarningsAsErrors is on
 dotnet test tests/DisputePortal.UnitTests
-dotnet test tests/DisputePortal.IntegrationTests    # needs Docker running (Testcontainers starts postgres:16-alpine and redis:7-alpine)
+dotnet test tests/DisputePortal.IntegrationTests    # needs Docker running (Testcontainers starts postgres:16-alpine and redis:7-alpine; KafkaTests also apache/kafka:3.8.0)
 dotnet test tests/DisputePortal.IntegrationTests --filter "FullyQualifiedName~DisputesTests.Dispute_ids_travel_in_the_body_not_the_url"
 dotnet tool restore && dotnet ef migrations add <Name> --project src/DisputePortal.Api --output-dir Data/Migrations --context AppDbContext   # --context: ReadDbContext shares the model
 ```
@@ -26,6 +26,7 @@ docker compose --profile tools up -d    # + Kafka UI on http://localhost:8081
 cd web && docker compose up --build -d  # portal on http://localhost:3000 (start the API first)
 docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d   # + Grafana on :3001 (admin/admin), Loki, Alloy
 scripts/backoffice.sh DSP-2026-001000 under-review|refund-issued|rejected ["note"]   # play the back office: publish a decision
+docker compose up -d db redis && dotnet run --project src/DisputePortal.Api   # API from source on :8080 (Development settings), instead of the compose api: primary only, no replica, Kafka off
 ```
 
 `docker/postgres/` holds the primary's `pg_hba.conf` (adds a replication line) and `replica-entrypoint.sh` (`pg_basebackup` on first start). `docker/kafka/create-topics.sh` is run by the one-shot `kafka-init` service. Broker auto-create is off, so a new topic goes there and in `Events/DisputeTopics.cs`.
@@ -42,19 +43,19 @@ npm run typecheck && npm run lint
 npm run build        # tsc + vite build (what the web Dockerfile runs)
 ```
 
-Postman: `docs/postman/` (collection + local environment, see its README). Headless run: `npx newman@6.2.1 run docs/postman/DisputePortal.postman_collection.json -e docs/postman/DisputePortal.local.postman_environment.json`.
+Postman: `docs/postman/` (collection + local environment, see its README). The collection covers every endpoint, so add new ones to it. Headless run: `npx newman@6.2.1 run docs/postman/DisputePortal.postman_collection.json -e docs/postman/DisputePortal.local.postman_environment.json`.
 
-Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compose): customers such as `thandi@example.com` and `sipho@example.com`, all with password `Demo@12345!`. `DbSeeder` gives every customer the same fixed scenario transactions plus random ones, so different customers see similar rows.
+Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compose): customers such as `thandi@example.com` and `sipho@example.com`, all with password `Demo@12345!`. `DbSeeder` gives every customer the same fixed scenario transactions plus random ones, so different customers see similar rows. `agent@example.com` (same password) is seeded separately, and only with `Agent:Enabled` on, so a database seeded earlier still gets it.
 
 ## Architecture
 
-**Request flow.** Controllers are thin HTTP shells (routing, auth attributes, `User.GetCustomerId()`, cookies and headers, results to responses). Each has a ViewModel in `ViewModels/` (`AuthViewModel`, `MeViewModel`, `TransactionsViewModel`, `DisputesViewModel`) that owns its reads (plain EF queries), logging and DTO mapping; keep new endpoints to that split. `DisputeService` owns every dispute write (raise, withdraw); `DisputesViewModel` delegates to it. ViewModels and services return `ServiceResult<T>` with a `ServiceError(Kind, Code, Message)`. Controllers convert errors with `this.ToProblem(error)` (`Helpers/ProblemResults.cs`): NotFound→404, Conflict→409, BusinessRule→422. Responses are RFC 7807 bodies with a stable `code` extension that the portal switches on. Return errors through `ProblemWithCode`/`ToProblem` rather than `NotFound()` etc., because that helper is also the central failure log.
+**Request flow.** Controllers are thin HTTP shells (routing, auth attributes, `User.GetCustomerId()`, cookies and headers, results to responses). Each has a ViewModel in `ViewModels/` (`AuthViewModel`, `MeViewModel`, `TransactionsViewModel`, `DisputesViewModel`) that owns its reads (plain EF queries), logging and DTO mapping; keep new endpoints to that split. `DisputeService` owns every dispute write (raise, withdraw); `DisputesViewModel` delegates to it. ViewModels and services return `ServiceResult<T>` with a `ServiceError(Kind, Code, Message)`. Controllers convert errors with `this.ToProblem(error)` (`Helpers/ProblemResults.cs`): NotFound→404, Conflict→409, BusinessRule→422. Responses are RFC 7807 bodies with a stable `code` extension that the portal switches on. Return errors through `ProblemWithCode`/`ToProblem` rather than `NotFound()` etc., because that helper is also the central failure log. Code outside MVC (authentication, middleware, exception handlers) uses `ProblemResponses.WriteAsync`, which writes the same log line and body.
 
 **Sessions.** Server-side, in Redis; there is no JWT.
 - Login (`AuthController`) creates a session via `RedisSessionStore` (`Services/SessionStore.cs`) and sets its random id in the `dp_session` cookie: httpOnly, SameSite=Strict, Secure (off only in local compose/Development via `Session:SecureCookie`), no Max-Age. The response body carries no token.
 - Redis key is `session:{sha256(id)}`, so neither the id nor the key is ever logged (`LoggingTests` asserts this).
 - `SessionAuthenticationHandler` (`Auth/`) authenticates each request with one `GETEX`, which also restarts the idle timer (`Session:IdleTimeout`, 5 min). `Session:AbsoluteLifetime` (8 h) caps a session however busy it is, using the injected `TimeProvider`.
-- It builds claims `role=customer`, `customerId`, `sub` (`Auth/SessionClaims.cs`); `User.GetCustomerId()` reads them. No session gives 401 `unauthenticated` and clears the cookie.
+- It builds claims `role=customer`, `customerId`, `sub` (`Auth/SessionClaims.cs`); `User.GetCustomerId()` reads them. An agent session has `role=agent`, `agentId`, `sub` and no `customerId`. No session gives 401 `unauthenticated` and clears the cookie; a live session in the wrong role gives 403 `forbidden`.
 - Redis unreachable fails closed: `SessionStoreUnavailableHandler` returns 503 `session_store_unavailable`, never 401, and `/health` checks Redis.
 - `POST /api/auth/logout` deletes the session and is always 204. Login deletes any session the browser already presented (session fixation).
 - `OriginCheckMiddleware` rejects state-changing requests from an `Origin` that is neither the API itself nor in `Cors:AllowedOrigins` (403 `origin_not_allowed`).
@@ -62,7 +63,9 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 
 **Customer isolation.** `User.GetCustomerId()` reads the customer id from the session's claims. Every query filters on that customerId, and another customer's record returns 404, the same as a missing one, never 403. Keep this for any new endpoint.
 
-**IDs never go in URLs.** Single-item operations are POSTs with the ID in the JSON body: `POST /api/transactions/lookup`, `/api/disputes/lookup`, `/api/disputes/withdraw`. Raising a dispute returns 201 with no `Location` header. Integration tests assert the old GET routes are 404. The portal follows the same rule for its own pages (`/transactions/dispute`, `/disputes/detail`): the ID travels in React Router state via `raiseDisputeLink`/`disputeLink`/`useStateId` in `web/src/lib/routes.ts`. A page opened without that state goes back to its list.
+**Demo agent.** `AgentController` (`/api/agent`, role `agent`) lists every customer's disputes through `ReadStore.QueryAcrossCustomersAsync`, leaving out the description, withdraw note and customer details. `AgentDecisionService` adds a decision to the outbox and returns 202; the usual `DecisionConsumer` and `DecisionHandler` apply it. It deliberately doesn't check the state machine, so a bad move lands on the DLQ or is skipped as stale, where the demo can show it. With `Agent:Enabled` off, login ignores the `Agents` table and agent sessions in Redis stop working. In the portal, `RequireRole` (`components/Layout.tsx`) keeps each role on its own pages and `lib/agentRules.ts` mirrors the consumer's outcomes to warn before sending.
+
+**IDs never go in URLs.** Single-item operations are POSTs with the ID in the JSON body: `POST /api/transactions/lookup`, `/api/disputes/lookup`, `/api/disputes/withdraw`, `/api/agent/disputes/decision`. Raising a dispute returns 201 with no `Location` header. Integration tests assert the old GET routes are 404. The portal follows the same rule for its own pages (`/transactions/dispute`, `/disputes/detail`): the ID travels in React Router state via `raiseDisputeLink`/`disputeLink`/`useStateId` in `web/src/lib/routes.ts`. A page opened without that state goes back to its list.
 
 **Dispute rules.**
 - `Models/Dispute.cs` holds the state machine: `AllowedTransitions`; status changes only via `TransitionTo`, which writes a `DisputeStatusHistory` row.
@@ -95,7 +98,7 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
   - Duplicates and stale events are skipped. Anything that can never apply is a `DecisionResult.DeadLetter(reason)`, which the consumer sends to `dispute-decisions-dlq` and commits.
   - Exceptions mean "retry": the consumer seeks back and backs off.
 - `Kafka:Enabled` is off by default and in tests: outbox rows are still written, but no publisher or consumer runs.
-- `/health` reports the `outbox` and `read-replica` checks as Degraded, never Unhealthy.
+- `/health` reports the `outbox` (registered only with Kafka on) and `read-replica` (only with a replica configured) checks as Degraded, never Unhealthy.
 
 **Dates.** Stored in UTC; customers filter by SAST calendar dates (`Helpers/Sast.cs`, fixed UTC+2). "Now" always comes from the injected `TimeProvider` so tests can pin it.
 
@@ -103,7 +106,7 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - One global partitioned fixed-window rate limiter: `/api/auth/login` gets 10/min, everything else (including logout) 300/min. Both are configurable, and `TrustForwardedFor` is off by default.
 - Model-validation 400s are logged by field name in `InvalidModelStateResponseFactory`.
 - JSON console logging outside Development.
-- `SecurityHeadersMiddleware`, 64 KB body limit, CORS policy "Portal" from `Cors:AllowedOrigins` (with credentials, for the session cookie).
+- `SecurityHeadersMiddleware`, 64 KB body limit, CORS policy "Portal" from `Cors:AllowedOrigins` (with credentials, for the session cookie). Its methods, request headers and exposed response headers are explicit lists, so a new one must be added there or the browser blocks it.
 - Swagger and seeding run in Development only.
 - Migrations are applied at startup.
 - Login uses a dummy BCrypt hash for unknown emails so timing does not reveal which accounts exist.
@@ -133,11 +136,11 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - `src/api/client.ts` is the fetch wrapper that turns ProblemDetails into `ApiError`.
 - `fetch` uses `credentials: 'include'`; the portal never sees the session id. `sessionStorage` (`src/auth/AuthContext.tsx`) holds only the display name and the idle deadline.
 - Every API response (except 401/503 and the login/logout calls) pushes the deadline back, mirroring the server's idle timer. The portal signs out at that deadline or on any 401. Sign out calls `POST /api/auth/logout`.
-- Only the customer may cause API calls: refetch on window focus or reconnect is off (`src/api/queryClient.ts`), because any request keeps the session alive. The deadline is also checked when the tab becomes visible or focused, because background-tab timers fire late.
-- A minute before the deadline `IdleWarningDialog` (in `Layout`) asks "Are you still there?" with a countdown. "Stay signed in" (or Escape) calls `GET /api/me` to restart the timer; "Sign out" signs out at once.
+- Only the customer may cause API calls: refetch on window focus or reconnect is off (`src/api/queryClient.ts`), because any request keeps the session alive. The one exception is the agent page, which polls for up to 10 s after the agent sends a decision. The deadline is also checked when the tab becomes visible or focused, because background-tab timers fire late.
+- A minute before the deadline `IdleWarningDialog` (in `Layout`) asks "Are you still there?" with a countdown. "Stay signed in" (or Escape) calls `GET /api/me` (agents: `GET /api/agent/session`) to restart the timer; "Sign out" signs out at once.
 - Dates are shown and typed day first. Display goes through `src/lib/format.ts` (en-ZA, SAST). Date inputs use `components/DateField.tsx` (dd/mm/yyyy, via `isoToDmy`/`dmyToIso`), never a bare `<input type="date">`, which follows the browser's language (mm/dd/yyyy in US English). URLs and the API keep `yyyy-MM-dd`.
 - `VITE_API_BASE` is baked in at build time.
-- Form rules mirror the API DTOs, so problems show before any request; change both sides together.
+- Form rules (zod schemas) mirror the API DTOs, so problems show before any request; change both sides together.
   - `src/lib/disputeRules.ts` mirrors `RaiseDisputeRequest`, `WithdrawDisputeRequest` and `PlainTextAttribute` (`isPlainText`).
   - `src/lib/loginRules.ts` mirrors `LoginRequest`.
   - Forms show one message per field (`FieldError` in `components/ui.tsx`) and focus the first bad field.

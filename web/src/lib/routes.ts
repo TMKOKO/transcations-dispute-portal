@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router'
+import type { Role } from '../api/types'
 
 // Ids travel in router state, never in the address: the same rule as the API's POST lookups. Router
 // state lives in the tab's history entry, so it survives a refresh and back/forward, but stays out
@@ -10,7 +11,11 @@ export const paths = {
   raiseDispute: '/transactions/dispute',
   disputes: '/disputes',
   disputeDetail: '/disputes/detail',
+  agentDisputes: '/agent/disputes',
 } as const
+
+/** Where each role lands, and where it is sent from a page that is not for it. */
+export const homeFor = (role: Role | undefined) => (role === 'agent' ? paths.agentDisputes : paths.transactions)
 
 interface IdState {
   transactionId?: string

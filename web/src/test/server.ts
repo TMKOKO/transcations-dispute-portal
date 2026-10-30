@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { API_BASE } from '../api/client'
-import type { DisputeDetail, DisputeReasonInfo, Paged, Transaction } from '../api/types'
+import type { AgentDispute, DisputeDetail, DisputeReasonInfo, Paged, Transaction } from '../api/types'
 
 export const api = (path: string) => `${API_BASE}${path}`
 
@@ -85,6 +85,18 @@ export const disputeDetail: DisputeDetail = {
   ],
 }
 
+export const agentDispute: AgentDispute = {
+  id: 'd-2',
+  disputeNumber: 'DSP-2026-001001',
+  status: 'Submitted',
+  reason: 'DuplicateCharge',
+  disputedAmount: 850,
+  currency: 'ZAR',
+  merchantName: 'Takealot.com',
+  createdAt: '2026-10-02T08:00:00Z',
+  updatedAt: '2026-10-02T08:00:00Z',
+}
+
 /** Defaults every test starts from; individual tests override with server.use(...). */
 export const handlers = [
   http.get(api('/api/transactions'), () => HttpResponse.json(paged([eligibleTx, openDisputeTx, oldTx]))),
@@ -99,6 +111,11 @@ export const handlers = [
   http.get(api('/api/disputes'), () => HttpResponse.json(paged([disputeDetail]))),
   http.post(api('/api/disputes/lookup'), () => HttpResponse.json(disputeDetail)),
   http.post(api('/api/auth/logout'), () => new HttpResponse(null, { status: 204 })),
+  http.get(api('/api/agent/session'), () => new HttpResponse(null, { status: 204 })),
+  http.get(api('/api/agent/disputes'), () => HttpResponse.json(paged([agentDispute]))),
+  http.post(api('/api/agent/disputes/decision'), () =>
+    HttpResponse.json({ eventId: 'evt-1', eventType: 'UnderReview', topic: 'dispute-under-review' }, { status: 202 }),
+  ),
 ]
 
 export const server = setupServer(...handlers)

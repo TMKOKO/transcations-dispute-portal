@@ -47,6 +47,18 @@ public sealed class ReadStore
             return await query(_primary);
         }
 
+        return await ReplicaThenPrimaryAsync(customerId, operation, query);
+    }
+
+    /// <summary>
+    /// A read that is not one customer's data (the agent's list), so there is no read-your-writes
+    /// routing: nothing the caller does writes these rows directly.
+    /// </summary>
+    public Task<T> QueryAcrossCustomersAsync<T>(string operation, Func<AppDbContext, Task<T>> query) =>
+        _hasReplica ? ReplicaThenPrimaryAsync(null, operation, query) : query(_primary);
+
+    private async Task<T> ReplicaThenPrimaryAsync<T>(Guid? customerId, string operation, Func<AppDbContext, Task<T>> query)
+    {
         try
         {
             return await query(_replica);

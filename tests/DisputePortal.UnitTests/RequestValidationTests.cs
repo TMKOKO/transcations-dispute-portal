@@ -22,6 +22,48 @@ public class RequestValidationTests
         DisputedAmount = 100.50m,
     };
 
+    private static AgentDecisionRequest ValidDecision() => new()
+    {
+        DisputeId = Guid.NewGuid(),
+        Decision  = DisputeDecision.UnderReview,
+    };
+
+    [Fact]
+    public void Agent_decision_needs_only_a_dispute_and_a_decision()
+    {
+        Assert.Empty(Validate(ValidDecision()));
+    }
+
+    [Fact]
+    public void Agent_decision_rejects_a_missing_dispute_or_decision()
+    {
+        var results = Validate(new AgentDecisionRequest());
+        Assert.Contains(results, v => v.MemberNames.Contains(nameof(AgentDecisionRequest.DisputeId)));
+        Assert.Contains(results, v => v.MemberNames.Contains(nameof(AgentDecisionRequest.Decision)));
+    }
+
+    [Theory]
+    [InlineData("Paid back.\nThanks", true)]
+    [InlineData("ok", true)]
+    [InlineData("Bad\u0000note", false)]
+    [InlineData("Bad‮note", false)]
+    public void Agent_decision_note_must_be_plain_text(string note, bool valid)
+    {
+        var r = ValidDecision();
+        r.Note = note;
+        Assert.Equal(valid, Validate(r).Count == 0);
+    }
+
+    [Fact]
+    public void Agent_decision_note_has_the_same_limit_as_the_consumer()
+    {
+        var r = ValidDecision();
+        r.Note = new string('a', 500);
+        Assert.Empty(Validate(r));
+        r.Note = new string('a', 501);
+        Assert.Contains(Validate(r), v => v.MemberNames.Contains(nameof(AgentDecisionRequest.Note)));
+    }
+
     [Fact]
     public void Valid_request_passes()
     {

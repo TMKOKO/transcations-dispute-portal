@@ -10,6 +10,8 @@ services:
         # Where the browser calls the API. The API's CORS list must include this portal's origin.
         VITE_API_BASE: http://localhost:8080
         VITE_DEMO_HINT: "true"
+        # The agent page's link to a topic. Needs `docker compose --profile tools up` in the repo root.
+        VITE_KAFKA_UI_URL: http://localhost:8081/ui/clusters/local/all-topics
     environment:
       API_ORIGIN: http://localhost:8080
     ports:

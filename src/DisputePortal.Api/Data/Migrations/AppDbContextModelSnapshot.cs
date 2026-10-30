@@ -25,6 +25,37 @@ namespace DisputePortal.Api.Data.Migrations
             modelBuilder.HasSequence("dispute_number_seq")
                 .StartsAt(1000L);
 
+            modelBuilder.Entity("DisputePortal.Api.Models.Agent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Email")
+                        .IsUnique();
+
+                    b.ToTable("Agents");
+                });
+
             modelBuilder.Entity("DisputePortal.Api.Models.Customer", b =>
                 {
                     b.Property<Guid>("Id")
