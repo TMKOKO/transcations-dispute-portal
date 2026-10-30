@@ -240,7 +240,7 @@ function OutcomeHint({ status, decision }: { status: DisputeStatus; decision: Di
     <p role="alert" className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
       {outcome === 'stale'
         ? `This will not change anything: the dispute is already ${statusLabel[status]}, so the consumer will skip it as stale.`
-        : `This will fail: it isn't allowed while the dispute is ${statusLabel[status]}, so the consumer will send it to dispute-decisions-dlq.`}
+        : `This will fail: it isn't allowed while the dispute is ${statusLabel[status]}, so the consumer will send it to dispute-decisions-dlq. Send Under review first, then Refund issued.`}
     </p>
   )
 }

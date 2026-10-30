@@ -56,6 +56,7 @@ describe('AgentDisputesPage', () => {
 
     await user.selectOptions(within(dialog).getByLabelText('Decision'), 'RefundIssued')
     expect(within(dialog).getByRole('alert')).toHaveTextContent('dispute-decisions-dlq')
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Send Under review first')
 
     await user.click(within(dialog).getByRole('button', { name: 'Send decision' }))
     expect(await screen.findByRole('status')).toHaveTextContent('dispute-refund-issued')
