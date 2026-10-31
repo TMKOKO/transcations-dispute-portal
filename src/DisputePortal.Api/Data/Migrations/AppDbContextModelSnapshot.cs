@@ -163,6 +163,9 @@ namespace DisputePortal.Api.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ux_disputes_customer_idempotency_key");
 
+                    b.HasIndex("TransactionId", "CreatedAt", "Id")
+                        .IsDescending(false, true, true);
+
                     b.ToTable("Disputes");
                 });
 
