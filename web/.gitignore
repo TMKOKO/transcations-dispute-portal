@@ -3,3 +3,5 @@ dist
 coverage
 *.local
 .env
+test-results
+playwright-report

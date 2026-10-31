@@ -1,0 +1,6 @@
+# Overlay for scripts/e2e.sh only. Every browser test signs in, so the login limit would be hit
+# within one run. Never use this for the demo or anything real.
+services:
+  api:
+    environment:
+      RateLimiting__AuthPermitsPerMinute: "1000"

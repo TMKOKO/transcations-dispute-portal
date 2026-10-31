@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { RaiseDisputeBody } from '../api/types'
 import { paths } from '../lib/routes'
 import { renderApp } from '../test/render'
-import { api, disputeDetail, server } from '../test/server'
+import { api, disputeDetail, eligibleTx, server } from '../test/server'
 
 const validDescription = 'I was charged twice for the same concert ticket.'
 
@@ -139,5 +139,50 @@ describe('RaiseDisputePage', () => {
   it('sends a page opened without a transaction (bookmark, new tab) back to the list', async () => {
     renderApp(paths.raiseDispute)
     expect(await screen.findByRole('heading', { name: 'Transactions' })).toBeInTheDocument()
+  })
+})
+
+describe('RaiseDisputePage when things go wrong', () => {
+  it('puts field errors from the API back on the form', async () => {
+    server.use(
+      http.post(api('/api/disputes'), () =>
+        HttpResponse.json({ status: 400, title: 'Invalid', errors: { description: ['Tell us a bit more.'], other: ['Not a field here.'] } }, { status: 400 }),
+      ),
+    )
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
+
+    await fillAndContinue(user)
+    await user.click(await screen.findByRole('button', { name: 'Submit dispute' }))
+
+    expect(await screen.findByLabelText('Describe what happened')).toHaveAccessibleDescription(expect.stringContaining('Tell us a bit more.'))
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument()
+  })
+
+  it('goes back from the review step with the answers kept', async () => {
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
+
+    await fillAndContinue(user)
+    await screen.findByRole('button', { name: 'Submit dispute' })
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(await screen.findByLabelText('Describe what happened')).toHaveValue(validDescription)
+  })
+
+  it('shows a failed transaction load and loads again on Try again', async () => {
+    let calls = 0
+    server.use(
+      http.post(api('/api/transactions/lookup'), () => {
+        calls++
+        return calls === 1
+          ? HttpResponse.json({ status: 404, detail: 'Gone.', code: 'transaction_not_found' }, { status: 404 })
+          : HttpResponse.json(eligibleTx)
+      }),
+    )
+    const { user } = renderApp(raiseDisputeRoute('tx-eligible'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not find that transaction.')
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('heading', { name: 'Raise a dispute' })).toBeInTheDocument()
   })
 })
