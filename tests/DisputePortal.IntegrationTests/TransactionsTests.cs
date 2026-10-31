@@ -4,15 +4,21 @@ using DisputePortal.Api.DTOs;
 using DisputePortal.Api.Models;
 using DisputePortal.Api.Services;
 using DisputePortal.IntegrationTests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 
 namespace DisputePortal.IntegrationTests;
 
 [Collection(ApiCollection.Name)]
 public class TransactionsTests : IAsyncLifetime
 {
+    private readonly ContainersFixture _containers;
     private readonly ApiFactory _api;
 
-    public TransactionsTests(ContainersFixture db) => _api = new ApiFactory(db);
+    public TransactionsTests(ContainersFixture db)
+    {
+        _containers = db;
+        _api = new ApiFactory(db);
+    }
 
     public Task InitializeAsync() => Task.CompletedTask;
     public Task DisposeAsync() => _api.DisposeAsync().AsTask();
@@ -84,6 +90,95 @@ public class TransactionsTests : IAsyncLifetime
         Assert.Equal(IneligibleReason.Pending, items[pending.Id].IneligibleCode);
         Assert.Equal(IneligibleReason.OutsideWindow, items[old.Id].IneligibleCode);
         Assert.All(items.Values.Where(t => !t.CanDispute), t => Assert.False(string.IsNullOrEmpty(t.IneligibleMessage)));
+    }
+
+    private static Task<HttpResponseMessage> RaiseAsync(HttpClient client, Transaction tx)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/disputes")
+        {
+            Content = JsonContent.Create(new
+            {
+                transactionId = tx.Id,
+                reason = "DuplicateCharge",
+                description = "I was charged twice for a single purchase.",
+                disputedAmount = tx.Amount,
+            }),
+        };
+        request.Headers.Add("Idempotency-Key", $"key-{Guid.NewGuid():N}");
+        return client.SendAsync(request);
+    }
+
+    /// <summary>Raises and withdraws one dispute on the transaction, then raises a second one.</summary>
+    private static async Task<(DisputeDetailResponse Withdrawn, DisputeDetailResponse Open)> TwoDisputesAsync(HttpClient client, Transaction tx)
+    {
+        var first = await (await RaiseAsync(client, tx)).ReadAsync<DisputeDetailResponse>();
+        var withdrawn = await client.PostAsJsonAsync("/api/disputes/withdraw", new { disputeId = first.Id, note = "Sorted out with the merchant." });
+        Assert.Equal(HttpStatusCode.OK, withdrawn.StatusCode);
+        var open = await (await RaiseAsync(client, tx)).ReadAsync<DisputeDetailResponse>();
+        return (first, open);
+    }
+
+    [Fact]
+    public async Task Each_transaction_reports_its_own_latest_dispute()
+    {
+        var c = await _api.CreateCustomerAsync();
+        var disputedTwice = await _api.CreateTransactionAsync(c.Id);
+        var disputedOnce = await _api.CreateTransactionAsync(c.Id);
+        var neverDisputed = await _api.CreateTransactionAsync(c.Id);
+        var client = await _api.CustomerClientAsync(c);
+
+        var (_, open) = await TwoDisputesAsync(client, disputedTwice);
+        var once = await (await RaiseAsync(client, disputedOnce)).ReadAsync<DisputeDetailResponse>();
+
+        var items = (await (await client.GetAsync("/api/transactions")).ReadAsync<PagedResponse<TransactionResponse>>())
+            .Items.ToDictionary(t => t.Id);
+
+        Assert.Equal(new DisputeRef(open.Id, open.DisputeNumber, DisputeStatus.Submitted), items[disputedTwice.Id].LatestDispute);
+        Assert.Equal(new DisputeRef(once.Id, once.DisputeNumber, DisputeStatus.Submitted), items[disputedOnce.Id].LatestDispute);
+        Assert.Null(items[neverDisputed.Id].LatestDispute);
+
+        var lookedUp = await (await client.PostAsJsonAsync("/api/transactions/lookup", new { transactionId = disputedTwice.Id })).ReadAsync<TransactionResponse>();
+        Assert.Equal(new DisputeRef(open.Id, open.DisputeNumber, DisputeStatus.Submitted), lookedUp.LatestDispute);
+    }
+
+    [Fact]
+    public async Task Disputes_raised_at_the_same_instant_report_one_consistent_dispute()
+    {
+        var c = await _api.CreateCustomerAsync();
+        var tx = await _api.CreateTransactionAsync(c.Id);
+        var client = await _api.CustomerClientAsync(c);
+        var (withdrawn, open) = await TwoDisputesAsync(client, tx);
+
+        var sameInstant = DateTime.UtcNow.AddMinutes(-1);
+        await _api.WithDbAsync(db => db.Disputes.Where(d => d.TransactionId == tx.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.CreatedAt, sameInstant)));
+        var expected = await _api.WithDbAsync(db => db.Disputes.Where(d => d.TransactionId == tx.Id)
+            .OrderByDescending(d => d.Id).Select(d => d.Id).FirstAsync());
+
+        var row = (await (await client.GetAsync("/api/transactions")).ReadAsync<PagedResponse<TransactionResponse>>()).Items.Single();
+
+        var latest = expected == open.Id
+            ? new DisputeRef(open.Id, open.DisputeNumber, DisputeStatus.Submitted)
+            : new DisputeRef(withdrawn.Id, withdrawn.DisputeNumber, DisputeStatus.Withdrawn);
+        Assert.Equal(latest, row.LatestDispute);
+    }
+
+    [Fact]
+    public async Task The_latest_dispute_is_read_per_row_not_by_ranking_every_dispute()
+    {
+        // Rewriting WithLatestDispute can bring ROW_NUMBER() back, which the tests would not otherwise
+        // notice: the answers stay right, and only a table of real size shows the cost.
+        await using var api = new ApiFactory(_containers, logSql: true);
+        var c = await api.CreateCustomerAsync();
+        var tx = await api.CreateTransactionAsync(c.Id);
+        var client = await api.CustomerClientAsync(c);
+
+        await client.GetAsync("/api/transactions");
+        await client.PostAsJsonAsync("/api/transactions/lookup", new { transactionId = tx.Id });
+
+        var reads = api.Logs.GetSnapshot().Where(r => r.Message.Contains("FROM \"Disputes\"")).ToList();
+        Assert.Equal(2, reads.Count(r => r.Message.Contains("\"Transactions\"")));
+        Assert.DoesNotContain(reads, r => r.Message.Contains("ROW_NUMBER"));
     }
 
     [Fact]

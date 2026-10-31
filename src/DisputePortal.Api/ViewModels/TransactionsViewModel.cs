@@ -90,14 +90,21 @@ public sealed class TransactionsViewModel
         return ServiceResult<TransactionResponse>.Ok(ToResponse(row));
     }
 
-    private sealed record Row(Transaction Transaction, DisputeRef? LatestDispute);
+    private sealed record Row(Transaction Transaction, Guid? DisputeId, string? DisputeNumber, DisputeStatus? DisputeStatus)
+    {
+        public DisputeRef? LatestDispute =>
+            DisputeId is { } id ? new DisputeRef(id, DisputeNumber!, DisputeStatus!.Value) : null;
+    }
 
-    // One query: the latest dispute is a correlated subquery, not a second round trip per row.
+    // One query: the latest dispute is correlated subqueries, not a second round trip per row. One
+    // per column on purpose: projecting them together makes EF rank every customer's disputes with
+    // ROW_NUMBER() on each request, whereas these only read this page's rows from
+    // IX_Disputes_TransactionId_CreatedAt_Id. Id breaks ties so all three pick the same dispute.
     private static readonly Expression<Func<Transaction, Row>> WithLatestDispute =
-        t => new Row(t, t.Disputes
-            .OrderByDescending(d => d.CreatedAt)
-            .Select(d => new DisputeRef(d.Id, d.DisputeNumber, d.Status))
-            .FirstOrDefault());
+        t => new Row(t,
+            t.Disputes.OrderByDescending(d => d.CreatedAt).ThenByDescending(d => d.Id).Select(d => (Guid?)d.Id).FirstOrDefault(),
+            t.Disputes.OrderByDescending(d => d.CreatedAt).ThenByDescending(d => d.Id).Select(d => d.DisputeNumber).FirstOrDefault(),
+            t.Disputes.OrderByDescending(d => d.CreatedAt).ThenByDescending(d => d.Id).Select(d => (DisputeStatus?)d.Status).FirstOrDefault());
 
     private TransactionResponse ToResponse(Row row) =>
         TransactionResponse.From(row.Transaction,

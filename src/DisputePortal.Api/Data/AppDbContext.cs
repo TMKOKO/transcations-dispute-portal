@@ -89,6 +89,10 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.DisputeNumber).IsUnique();
             entity.HasIndex(e => new { e.CustomerId, e.CreatedAt });
 
+            // A transaction's latest dispute, read once per row on every transactions page.
+            entity.HasIndex(e => new { e.TransactionId, e.CreatedAt, e.Id })
+                  .IsDescending(false, true, true);
+
             // At most one open dispute per transaction, enforced by the database. The service checks
             // first for a friendly 409, but two submits in flight can both pass that check; this
             // index makes the second INSERT fail rather than create a duplicate case.

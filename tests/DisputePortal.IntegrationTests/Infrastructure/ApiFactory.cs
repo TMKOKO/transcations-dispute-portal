@@ -24,16 +24,19 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly string? _readOnlyConnectionString;
     private readonly string? _kafkaBootstrapServers;
     private readonly bool _agentEnabled;
+    private readonly bool _logSql;
 
     /// <param name="redisConnectionString">Override to point the API at a Redis that is not there.</param>
     /// <param name="readOnlyConnectionString">A read replica; the test database itself, or one that is not there.</param>
     /// <param name="kafkaBootstrapServers">Turns Kafka on (outbox publisher and decision consumer). Off by default.</param>
     /// <param name="agentEnabled">Turns the demo agent login on. Off by default, as in production.</param>
+    /// <param name="logSql">Records the SQL EF runs in <see cref="Logs"/>, for asserting on a query's shape.</param>
     public ApiFactory(ContainersFixture containers, int authPermitsPerMinute = 10_000, TimeProvider? clock = null,
         string? redisConnectionString = null, string? readOnlyConnectionString = null, string? kafkaBootstrapServers = null,
-        bool agentEnabled = false)
+        bool agentEnabled = false, bool logSql = false)
     {
         _agentEnabled = agentEnabled;
+        _logSql = logSql;
         _connectionString = containers.ConnectionString;
         _redisConnectionString = redisConnectionString ?? containers.RedisConnectionString;
         _authPermitsPerMinute = authPermitsPerMinute;
@@ -79,6 +82,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
         // In-memory copy of every log record, so tests can assert what was (and was not) logged.
         builder.ConfigureLogging(logging => logging.AddFakeLogging());
+
+        if (_logSql)
+            builder.UseSetting("Logging:LogLevel:Microsoft.EntityFrameworkCore.Database.Command", "Information");
     }
 
     public FakeLogCollector Logs => Services.GetFakeLogCollector();
