@@ -111,4 +111,9 @@ describe('request', () => {
     server.use(http.get(api('/api/me'), () => HttpResponse.error()))
     await expect(request('/api/me')).rejects.toMatchObject({ status: 0, code: 'network_error' })
   })
+
+  it('still reports a readable error when the body is not JSON', async () => {
+    server.use(http.get(api('/api/me'), () => new HttpResponse('<html>Bad gateway</html>', { status: 502 })))
+    await expect(request('/api/me')).rejects.toMatchObject({ status: 502, message: 'Something went wrong. Please try again.' })
+  })
 })

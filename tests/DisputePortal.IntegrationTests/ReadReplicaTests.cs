@@ -1,6 +1,9 @@
 using System.Net;
+using DisputePortal.Api.Data;
 using DisputePortal.Api.DTOs;
 using DisputePortal.IntegrationTests.Infrastructure;
+using Microsoft.Extensions.Logging.Abstractions;
+using StackExchange.Redis;
 
 namespace DisputePortal.IntegrationTests;
 
@@ -76,5 +79,22 @@ public class ReadYourWritesTests : IAsyncLifetime
         var disputes = await (await client.GetAsync("/api/disputes")).ReadAsync<PagedResponse<DisputeSummaryResponse>>();
         Assert.Single(disputes.Items);
         Assert.True(PinnedToPrimary());
+    }
+}
+
+/// <summary>Redis can't say whether a customer just wrote, so reads must take the safe route.</summary>
+public class ReadYourWritesWithoutRedisTests
+{
+    [Fact]
+    public async Task Marking_does_not_fail_the_write_and_reads_go_to_the_primary()
+    {
+        // Nothing listens on port 1; short timeouts so the test does not wait out the defaults.
+        await using var redis = await ConnectionMultiplexer.ConnectAsync("127.0.0.1:1,abortConnect=false,connectTimeout=500,syncTimeout=500,asyncTimeout=500");
+        var readYourWrites = new ReadYourWrites(redis, NullLogger<ReadYourWrites>.Instance);
+        var customerId = Guid.NewGuid();
+
+        await readYourWrites.MarkAsync(customerId);
+
+        Assert.True(await readYourWrites.IsRecentAsync(customerId));
     }
 }

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { renderApp } from '../test/render'
@@ -146,5 +146,83 @@ describe('TransactionsPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Server error')
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+})
+
+describe('TransactionsPage list states', () => {
+  function recordRequests(body: unknown) {
+    const searches: string[] = []
+    server.use(
+      http.get(api('/api/transactions'), ({ request }) => {
+        searches.push(new URL(request.url).search)
+        return HttpResponse.json(body as object)
+      }),
+    )
+    return searches
+  }
+
+  it('says when the customer has no transactions at all', async () => {
+    recordRequests(paged([]))
+    renderApp('/transactions')
+
+    expect(await screen.findByText('No transactions yet')).toBeInTheDocument()
+    expect(screen.queryByText('Try a different search or date range.')).not.toBeInTheDocument()
+  })
+
+  it('says when filters match nothing, and suggests changing them', async () => {
+    recordRequests(paged([]))
+    renderApp('/transactions?search=nothing')
+
+    expect(await screen.findByText('No transactions match your filters')).toBeInTheDocument()
+    expect(screen.getByText('Try a different search or date range.')).toBeInTheDocument()
+  })
+
+  it('shows a failure and loads again on Try again', async () => {
+    let calls = 0
+    server.use(
+      http.get(api('/api/transactions'), () => {
+        calls++
+        return calls === 1
+          ? HttpResponse.json({ status: 404, detail: 'Could not load.', code: 'nope' }, { status: 404 })
+          : HttpResponse.json(paged([eligibleTx]))
+      }),
+    )
+    const { user } = renderApp('/transactions')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load.')
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('list', { name: 'Transactions' })).toBeInTheDocument()
+  })
+
+  it('moves between pages, keeping the filters', async () => {
+    const searches = recordRequests({ items: [eligibleTx], page: 1, pageSize: 15, totalCount: 40, totalPages: 3 })
+    const { user } = renderApp('/transactions?search=compu')
+
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(searches.at(-1)).toContain('page=2'))
+    expect(searches.at(-1)).toContain('search=compu')
+  })
+
+  it('goes back to page 1 when a filter changes', async () => {
+    const searches = recordRequests({ items: [eligibleTx], page: 2, pageSize: 15, totalCount: 40, totalPages: 3 })
+    const { user } = renderApp('/transactions?page=2')
+    await screen.findByRole('list', { name: 'Transactions' })
+
+    await user.type(screen.getByLabelText('To'), '13/02/2026')
+    await user.tab()
+
+    await waitFor(() => expect(searches.at(-1)).toContain('2026-02-13'))
+    expect(searches.at(-1)).not.toContain('page=2')
+  })
+
+  it('handles the search form itself, so submitting it never reloads the page', async () => {
+    recordRequests(paged([eligibleTx]))
+    renderApp('/transactions')
+    await screen.findByRole('list', { name: 'Transactions' })
+
+    // fireEvent returns false when the handler called preventDefault.
+    expect(fireEvent.submit(screen.getByRole('search'))).toBe(false)
   })
 })
