@@ -28,7 +28,7 @@ public class RaiseDisputeRequest : IValidatableObject
 
     // The upper bound against the transaction amount is a business rule, checked in DisputeService.
     [Required]
-    [Range(typeof(decimal), "0.01", "9999999999.99", ErrorMessage = "Disputed amount must be greater than zero.")]
+    [Range(0.01, 9999999999.99, ErrorMessage = "Disputed amount must be greater than zero.")]
     public decimal? DisputedAmount { get; set; }
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
