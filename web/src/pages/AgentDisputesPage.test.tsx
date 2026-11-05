@@ -173,3 +173,115 @@ describe('role routing', () => {
     expect(await screen.findByRole('heading', { name: 'Transactions' })).toBeInTheDocument()
   })
 })
+
+describe('AgentDisputesPage list', () => {
+  it('filters by status, and All clears the filter', async () => {
+    const searches: string[] = []
+    server.use(
+      http.get(api('/api/agent/disputes'), ({ request }) => {
+        searches.push(new URL(request.url).search)
+        return HttpResponse.json(paged([agentDispute]))
+      }),
+    )
+    const { user } = renderApp(paths.agentDisputes, { role: 'agent' })
+    await screen.findByRole('list', { name: 'Disputes' })
+    const group = screen.getByRole('group', { name: 'Filter by status' })
+
+    await user.click(within(group).getByRole('button', { name: 'Under review' }))
+    await waitFor(() => expect(searches.at(-1)).toContain('status=UnderReview'))
+    expect(within(group).getByRole('button', { name: 'Under review' })).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(within(group).getByRole('button', { name: 'All' }))
+    expect(within(group).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('keeps the filter when moving between pages', async () => {
+    const searches: string[] = []
+    server.use(
+      http.get(api('/api/agent/disputes'), ({ request }) => {
+        searches.push(new URL(request.url).search)
+        return HttpResponse.json({ items: [agentDispute], page: 1, pageSize: 15, totalCount: 20, totalPages: 2 })
+      }),
+    )
+    const { user } = renderApp(`${paths.agentDisputes}?status=Submitted`, { role: 'agent' })
+
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(searches.at(-1)).toContain('page=2'))
+    expect(searches.at(-1)).toContain('status=Submitted')
+  })
+
+  it.each([
+    ['', 'No disputes yet'],
+    ['?status=Rejected', 'No declined disputes'],
+  ])('says when there is nothing to list (%s)', async (search, title) => {
+    server.use(http.get(api('/api/agent/disputes'), () => HttpResponse.json(paged([]))))
+    renderApp(`${paths.agentDisputes}${search}`, { role: 'agent' })
+
+    expect(await screen.findByText(title)).toBeInTheDocument()
+  })
+
+  it('shows a failure and loads again on Try again', async () => {
+    let calls = 0
+    server.use(
+      http.get(api('/api/agent/disputes'), () => {
+        calls++
+        return calls === 1
+          ? HttpResponse.json({ status: 404, detail: 'Could not load.', code: 'nope' }, { status: 404 })
+          : HttpResponse.json(paged([agentDispute]))
+      }),
+    )
+    const { user } = renderApp(paths.agentDisputes, { role: 'agent' })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load.')
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('list', { name: 'Disputes' })).toBeInTheDocument()
+  })
+
+  it('sends nothing when the dialog is cancelled', async () => {
+    let sent = false
+    server.use(
+      http.post(api('/api/agent/disputes/decision'), () => {
+        sent = true
+        return new HttpResponse(null, { status: 202 })
+      }),
+    )
+    const { user } = renderApp(paths.agentDisputes, { role: 'agent' })
+
+    const dialog = await openDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(sent).toBe(false)
+  })
+
+  it('has no Kafka UI link unless one is configured', async () => {
+    const { user } = renderApp(paths.agentDisputes, { role: 'agent' })
+
+    const dialog = await openDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Send decision' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('dispute-under-review')
+    expect(screen.queryByRole('link', { name: 'Open in Kafka UI' })).not.toBeInTheDocument()
+  })
+
+  it('links the sent decision to its topic in Kafka UI when configured', async () => {
+    vi.stubEnv('VITE_KAFKA_UI_URL', 'http://localhost:8081/topics/')
+    vi.resetModules() // the page reads the setting once, when it loads
+    try {
+      const { renderApp: renderFresh } = await import('../test/render')
+      const { user } = renderFresh(paths.agentDisputes, { role: 'agent' })
+
+      await user.click(await screen.findByRole('button', { name: `Update status of ${agentDispute.disputeNumber}` }))
+      await user.click(screen.getByRole('button', { name: 'Send decision' }))
+
+      const link = await screen.findByRole('link', { name: 'Open in Kafka UI' })
+      expect(link).toHaveAttribute('href', 'http://localhost:8081/topics/dispute-under-review')
+      expect(link).toHaveAttribute('rel', 'noreferrer')
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  })
+})

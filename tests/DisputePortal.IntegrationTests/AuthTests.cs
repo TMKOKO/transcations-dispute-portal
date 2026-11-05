@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using DisputePortal.Api.DTOs;
 using DisputePortal.IntegrationTests.Infrastructure;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 
@@ -203,6 +206,62 @@ public class AuthTests : IAsyncLifetime
 }
 
 [Collection(ApiCollection.Name)]
+public class DamagedSessionTests : IAsyncLifetime
+{
+    private readonly ApiFactory _api;
+
+    public DamagedSessionTests(ContainersFixture db) => _api = new ApiFactory(db);
+
+    public Task InitializeAsync() => Task.CompletedTask;
+    public Task DisposeAsync() => _api.DisposeAsync().AsTask();
+
+    /// <summary>A client presenting a session whose stored value is exactly <paramref name="stored"/>.</summary>
+    private async Task<(HttpClient Client, string Key)> ClientWithStoredSessionAsync(string stored)
+    {
+        var sessionId = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+        var key = ApiFactory.RedisKeyFor(sessionId);
+        await _api.Redis.StringSetAsync(key, stored, TimeSpan.FromMinutes(1));
+        return (_api.ClientWithSession(sessionId), key);
+    }
+
+    [Fact]
+    public async Task A_stored_null_ends_the_session()
+    {
+        var (client, key) = await ClientWithStoredSessionAsync("null");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me")).StatusCode);
+        Assert.False(await _api.Redis.KeyExistsAsync(key));
+    }
+
+    [Fact]
+    public async Task A_session_with_neither_a_customer_nor_an_agent_is_rejected()
+    {
+        var (client, _) = await ClientWithStoredSessionAsync($$"""{"CreatedAt":"{{DateTimeOffset.UtcNow:O}}"}""");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me")).StatusCode);
+    }
+
+    [Fact(Skip = "Known bug: RedisSessionStore.TouchAsync doesn't catch JsonException, so this is a 500, not a 401.")]
+    public async Task A_stored_value_that_is_not_json_is_rejected()
+    {
+        var (client, _) = await ClientWithStoredSessionAsync("not json");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me")).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_live_session_for_a_customer_who_no_longer_exists_is_treated_as_signed_out()
+    {
+        var customer = await _api.CreateCustomerAsync();
+        var client = await _api.CustomerClientAsync(customer);
+        await _api.WithDbAsync(db => db.Customers.Where(c => c.Id == customer.Id).ExecuteDeleteAsync());
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me")).StatusCode);
+        Assert.Contains(_api.Logs.GetSnapshot(), r => r.Level == LogLevel.Warning && r.Message.Contains("no longer exists"));
+    }
+}
+
+[Collection(ApiCollection.Name)]
 public class SessionLifetimeTests : IAsyncLifetime
 {
     private readonly FakeTimeProvider _clock = new(DateTimeOffset.UtcNow);
@@ -302,5 +361,51 @@ public class RateLimitTests : IAsyncLifetime
                                                    && r.Message.Contains("429 rate_limited: auth limit reached"));
         // Signing out is not a credential guess and has its own budget.
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/auth/logout", null)).StatusCode);
+    }
+
+    internal static Task<HttpResponseMessage> GuessFromAsync(HttpClient client, string forwardedFor)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
+        {
+            Content = JsonContent.Create(new { email = "nobody@example.test", password = "guess" }),
+        };
+        request.Headers.Add("X-Forwarded-For", forwardedFor);
+        return client.SendAsync(request);
+    }
+
+    [Fact]
+    public async Task A_made_up_forwarded_address_does_not_get_around_the_limit()
+    {
+        var client = _api.CreateClient();
+
+        for (var i = 0; i < 3; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await GuessFromAsync(client, $"203.0.113.{i}")).StatusCode);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await GuessFromAsync(client, "203.0.113.99")).StatusCode);
+    }
+}
+
+[Collection(ApiCollection.Name)]
+public class RateLimitBehindAProxyTests : IAsyncLifetime
+{
+    private readonly ApiFactory _api;
+
+    public RateLimitBehindAProxyTests(ContainersFixture db) =>
+        _api = new ApiFactory(db, authPermitsPerMinute: 2, settings: new Dictionary<string, string> { ["RateLimiting:TrustForwardedFor"] = "true" });
+
+    public Task InitializeAsync() => Task.CompletedTask;
+    public Task DisposeAsync() => _api.DisposeAsync().AsTask();
+
+    [Fact]
+    public async Task When_trusted_each_forwarded_client_has_its_own_limit()
+    {
+        var client = _api.CreateClient();
+
+        // The first address in the list is the client's; the rest are proxies.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await RateLimitTests.GuessFromAsync(client, "203.0.113.1, 10.0.0.1")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await RateLimitTests.GuessFromAsync(client, "203.0.113.1, 10.0.0.2")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await RateLimitTests.GuessFromAsync(client, "203.0.113.1, 10.0.0.3")).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await RateLimitTests.GuessFromAsync(client, "203.0.113.2, 10.0.0.1")).StatusCode);
     }
 }

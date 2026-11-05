@@ -14,9 +14,16 @@ dotnet test tests/DisputePortal.UnitTests
 dotnet test tests/DisputePortal.IntegrationTests    # needs Docker running (Testcontainers starts postgres:16-alpine and redis:7-alpine; KafkaTests also apache/kafka:3.8.0)
 dotnet test tests/DisputePortal.IntegrationTests --filter "FullyQualifiedName~DisputesTests.Dispute_ids_travel_in_the_body_not_the_url"
 dotnet tool restore && dotnet ef migrations add <Name> --project src/DisputePortal.Api --output-dir Data/Migrations --context AppDbContext   # --context: ReadDbContext shares the model
+
+# Coverage: one report from both test projects, in TestResults/report/index.html
+dotnet test tests/DisputePortal.UnitTests --collect "XPlat Code Coverage" --settings coverlet.runsettings --results-directory TestResults/unit
+dotnet test tests/DisputePortal.IntegrationTests --collect "XPlat Code Coverage" --settings coverlet.runsettings --results-directory TestResults/integration
+dotnet tool run reportgenerator -reports:"TestResults/**/coverage.cobertura.xml" -targetdir:TestResults/report
 ```
 
 Run the two test projects separately rather than the whole solution at once; on this machine a combined run has been killed for low memory. There is no CI (`.github/workflows` is empty), so these local runs are the only check before a PR.
+
+`scripts/e2e.sh` runs the Playwright browser tests (`web/e2e/`) against the whole stack. It uses its own compose projects and volumes and removes them afterwards, so the demo's data is safe, but it needs the same ports, so stop the demo first (`docker compose stop` in the repo root and `web/`, plus any observability containers, whose log collector would otherwise pick up the test stack).
 
 Local stack:
 
@@ -38,6 +45,7 @@ Web (`web/`, Node >= 20.11):
 ```bash
 npm run dev          # Vite on :5173 (already in the API's CORS list)
 npm test             # vitest + msw, jsdom
+npm run test:coverage   # the same, failing below the thresholds in vite.config.ts; report in web/coverage/
 npx vitest run src/pages/LoginPage.test.tsx
 npm run typecheck && npm run lint
 npm run build        # tsc + vite build (what the web Dockerfile runs)
@@ -128,6 +136,8 @@ Demo data is seeded only when `ASPNETCORE_ENVIRONMENT=Development` (as in compos
 - `EventsTests` covers the outbox, `OutboxRelay` (with a fake `IEventPublisher`) and `DecisionHandler` directly, with no broker.
 - `KafkaTests` is the one class with a real broker: an `IClassFixture<KafkaFixture>` running `apache/kafka`, with `ApiFactory(kafkaBootstrapServers:)`.
 - `ApiFactory(readOnlyConnectionString:)` sets up a replica: either the test database, or a dead port for failover tests.
+- `ApiFactory(configureServices:, settings:)` swap a service or set any configuration. For a race, register a `BeforeSave` (`Infrastructure/`) so a competing write lands between a service's check and its save every time, rather than relying on timing (`RaceTests`).
+- `appsettings.Development.json` points at the local compose database, so never start `ApiFactory` in Development without the safeguards in `StartupTests`: its own database, plus environment variables that outrank that file.
 - The outbox table is shared, so a test asserts on its own dispute's rows (`Key` = dispute id).
 - Clients use `https://localhost` so the Secure cookie flows. `CustomerClientAsync` signs in through the client's cookie container. `ClientWithSession(id)` sends a raw session id, and `ApiFactory.Redis` asserts on keys and TTLs.
 

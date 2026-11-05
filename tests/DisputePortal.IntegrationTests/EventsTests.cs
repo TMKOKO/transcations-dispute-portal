@@ -259,6 +259,19 @@ public class EventsTests : IAsyncLifetime
             (await HandleAsync(DisputeTopics.UnderReview, Decision(disputeId, DisputeEventTypes.UnderReview, "bad‮note"))).Reason);
         Assert.Equal("dispute_not_found",
             (await HandleAsync(DisputeTopics.UnderReview, Decision(Guid.NewGuid(), DisputeEventTypes.UnderReview))).Reason);
+        Assert.Equal("unknown_topic",
+            (await HandleAsync(DisputeTopics.Submitted, Decision(disputeId, DisputeEventTypes.UnderReview))).Reason);
+
+        var fromTheFuture = new DisputeEvent
+        {
+            SchemaVersion = DisputeEvent.CurrentSchemaVersion + 1,
+            EventId       = Guid.NewGuid(),
+            EventType     = DisputeEventTypes.UnderReview,
+            OccurredAt    = DateTimeOffset.UtcNow,
+            DisputeId     = disputeId,
+        }.ToJson();
+        Assert.Equal("unsupported_schema_version", (await HandleAsync(DisputeTopics.UnderReview, fromTheFuture)).Reason);
+
         Assert.Equal(DisputeStatus.Submitted, (await DisputeAsync(disputeId)).Status);
     }
 

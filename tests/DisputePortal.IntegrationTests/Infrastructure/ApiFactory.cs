@@ -25,19 +25,30 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly string? _kafkaBootstrapServers;
     private readonly bool _agentEnabled;
     private readonly bool _logSql;
+    private readonly Action<IServiceCollection>? _configureServices;
+    private readonly IReadOnlyDictionary<string, string>? _settings;
+    private readonly string _environment;
 
     /// <param name="redisConnectionString">Override to point the API at a Redis that is not there.</param>
     /// <param name="readOnlyConnectionString">A read replica; the test database itself, or one that is not there.</param>
     /// <param name="kafkaBootstrapServers">Turns Kafka on (outbox publisher and decision consumer). Off by default.</param>
     /// <param name="agentEnabled">Turns the demo agent login on. Off by default, as in production.</param>
     /// <param name="logSql">Records the SQL EF runs in <see cref="Logs"/>, for asserting on a query's shape.</param>
+    /// <param name="configureServices">Swaps services after the app has registered its own, such as a fake publisher.</param>
+    /// <param name="settings">Any other configuration, as "Section:Key" and value.</param>
+    /// <param name="environment">The hosting environment. See <c>StartupTests</c> before using Development.</param>
+    /// <param name="connectionString">A database other than the shared test one.</param>
     public ApiFactory(ContainersFixture containers, int authPermitsPerMinute = 10_000, TimeProvider? clock = null,
         string? redisConnectionString = null, string? readOnlyConnectionString = null, string? kafkaBootstrapServers = null,
-        bool agentEnabled = false, bool logSql = false)
+        bool agentEnabled = false, bool logSql = false, Action<IServiceCollection>? configureServices = null,
+        IReadOnlyDictionary<string, string>? settings = null, string environment = "Testing", string? connectionString = null)
     {
         _agentEnabled = agentEnabled;
         _logSql = logSql;
-        _connectionString = containers.ConnectionString;
+        _configureServices = configureServices;
+        _settings = settings;
+        _environment = environment;
+        _connectionString = connectionString ?? containers.ConnectionString;
         _redisConnectionString = redisConnectionString ?? containers.RedisConnectionString;
         _authPermitsPerMinute = authPermitsPerMinute;
         _clock = clock;
@@ -55,7 +66,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // "Testing", not Development: no demo seed, no Swagger — the production pipeline.
-        builder.UseEnvironment("Testing");
+        builder.UseEnvironment(_environment);
 
         // UseSetting rather than ConfigureAppConfiguration: Program.cs reads the Redis connection
         // and rate limits before Build(), and only host settings are visible that early.
@@ -77,8 +88,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             builder.UseSetting("Kafka:GroupId", $"dispute-portal-test-{Guid.NewGuid():N}");
         }
 
+        foreach (var (key, value) in _settings ?? new Dictionary<string, string>())
+            builder.UseSetting(key, value);
+
         if (_clock is not null)
             builder.ConfigureTestServices(services => services.AddSingleton(_clock));
+
+        if (_configureServices is not null)
+            builder.ConfigureTestServices(_configureServices);
 
         // In-memory copy of every log record, so tests can assert what was (and was not) logged.
         builder.ConfigureLogging(logging => logging.AddFakeLogging());

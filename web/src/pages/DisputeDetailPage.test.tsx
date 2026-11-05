@@ -118,3 +118,66 @@ describe('DisputeDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'DSP-2026-001000' })).toBeInTheDocument()
   })
 })
+
+describe('DisputeDetailPage when things go wrong', () => {
+  const route = { pathname: paths.disputeDetail, state: { disputeId: 'd-1' } }
+
+  it('cancelling the withdraw dialog clears its error and sends nothing', async () => {
+    let sent = false
+    server.use(
+      http.post(api('/api/disputes/withdraw'), () => {
+        sent = true
+        return HttpResponse.json(disputeDetail)
+      }),
+    )
+    const { user } = renderApp(route)
+
+    await user.click(await screen.findByRole('button', { name: 'Withdraw dispute' }))
+    let dialog = screen.getByRole('dialog', { name: 'Withdraw this dispute?' })
+    await user.type(within(dialog).getByLabelText('Reason (optional)'), 'no')
+    await user.click(within(dialog).getByRole('button', { name: 'Withdraw dispute' }))
+    expect(within(dialog).getByLabelText('Reason (optional)')).toHaveAttribute('aria-invalid', 'true')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Keep dispute' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(sent).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Withdraw dispute' }))
+    dialog = screen.getByRole('dialog', { name: 'Withdraw this dispute?' })
+    expect(within(dialog).getByLabelText('Reason (optional)')).not.toHaveAttribute('aria-invalid')
+  })
+
+  it('closes the dialog and shows why when the API refuses the withdraw', async () => {
+    server.use(
+      http.post(api('/api/disputes/withdraw'), () =>
+        HttpResponse.json({ status: 409, detail: 'This dispute was updated by someone else.', code: 'concurrent_update' }, { status: 409 }),
+      ),
+    )
+    const { user } = renderApp(route)
+
+    await user.click(await screen.findByRole('button', { name: 'Withdraw dispute' }))
+    const dialog = screen.getByRole('dialog', { name: 'Withdraw this dispute?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Withdraw dispute' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('This dispute was updated by someone else.')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('shows a failed load and loads again on Try again', async () => {
+    let calls = 0
+    server.use(
+      http.post(api('/api/disputes/lookup'), () => {
+        calls++
+        return calls === 1
+          ? HttpResponse.json({ status: 403, detail: 'Could not load.', code: 'nope' }, { status: 403 })
+          : HttpResponse.json(disputeDetail)
+      }),
+    )
+    const { user } = renderApp(route)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load.')
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('heading', { name: 'DSP-2026-001000' })).toBeInTheDocument()
+  })
+})

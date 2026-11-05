@@ -142,6 +142,22 @@ public class DisputesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_transaction_whose_dispute_was_resolved_cannot_be_disputed_again()
+    {
+        var c = await _api.CreateCustomerAsync();
+        var tx = await _api.CreateTransactionAsync(c.Id);
+        var client = await _api.CustomerClientAsync(c);
+        var dispute = await (await RaiseAsync(client, Body(tx.Id))).ReadAsync<DisputeDetailResponse>();
+        await _api.WithDbAsync(db => db.Disputes.Where(d => d.Id == dispute.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, DisputeStatus.Resolved)));
+
+        var response = await RaiseAsync(client, Body(tx.Id));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("dispute_already_resolved", await response.ProblemCodeAsync());
+    }
+
+    [Fact]
     public async Task Missing_or_malformed_idempotency_key_is_400()
     {
         var c = await _api.CreateCustomerAsync();
